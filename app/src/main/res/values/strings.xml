@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RoadLog</string>
+    <string name="start_trip">START TRIP</string>
+    <string name="stop_and_export">STOP &amp; EXPORT</string>
+    <string name="camera_checkbox_label">Enable photos</string>
+    <string name="take_photo_now">Take photo now</string>
+</resources>
