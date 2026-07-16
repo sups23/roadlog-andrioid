@@ -151,7 +151,8 @@ fun <T> downsampleToCount(items: List<T>, maxCount: Int): List<T> {
 fun downsampleToRate(samples: List<TripData>, targetIntervalMs: Long): List<TripData> {
     if (samples.isEmpty() || targetIntervalMs <= 0) return samples
     val result = mutableListOf<TripData>()
-    var lastTimestamp = Long.MIN_VALUE
+    // Use Long.MIN_VALUE / 2 to avoid overflow when subtracting a real timestamp.
+    var lastTimestamp = Long.MIN_VALUE / 2
     for (sample in samples) {
         if (sample.timestamp - lastTimestamp >= targetIntervalMs) {
             result.add(sample)

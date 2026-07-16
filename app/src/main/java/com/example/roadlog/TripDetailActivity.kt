@@ -228,7 +228,7 @@ class TripDetailActivity : AppCompatActivity() {
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
                 val downsampleStart = System.currentTimeMillis()
-                val displayGps = downsampleToCount(gpsData, 500)
+                val displayGps = downsampleToCount(gpsData, 200)
                 val displayAccel = downsampleToRate(accelData, 1000L)
                 val displayGyro = downsampleToRate(gyroData, 1000L)
                 val displayRotation = downsampleToRate(rotationData, 1000L)
@@ -369,14 +369,29 @@ class TripDetailActivity : AppCompatActivity() {
         val maxRoughness = segmentRoughness.maxOrNull() ?: 0.0
         val minRoughness = 0.0
 
-        segmentRoughness.forEachIndexed { index, roughness ->
-            val segment = Polyline().apply {
-                outlinePaint.color = roughnessColor(roughness, minRoughness, maxRoughness)
-                outlinePaint.strokeWidth = 8f
-                setPoints(listOf(points[index], points[index + 1]))
+        // Group consecutive segments with the same color to reduce overlay count.
+        var groupStart = 0
+        var groupColor = roughnessColor(segmentRoughness.firstOrNull() ?: 0.0, minRoughness, maxRoughness)
+        for (i in 1 until segmentRoughness.size) {
+            val color = roughnessColor(segmentRoughness[i], minRoughness, maxRoughness)
+            if (color != groupColor) {
+                val segment = Polyline().apply {
+                    outlinePaint.color = groupColor
+                    outlinePaint.strokeWidth = 8f
+                    setPoints(points.subList(groupStart, i + 1))
+                }
+                mapView.overlays.add(segment)
+                groupStart = i
+                groupColor = color
             }
-            mapView.overlays.add(segment)
         }
+        // Final group
+        val segment = Polyline().apply {
+            outlinePaint.color = groupColor
+            outlinePaint.strokeWidth = 8f
+            setPoints(points.subList(groupStart, points.size))
+        }
+        mapView.overlays.add(segment)
 
         // Add start and end markers
         val startMarker = Marker(mapView).apply {
