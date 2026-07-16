@@ -44,6 +44,9 @@ enum class CauseCode(val displayName: String) {
     BUS("Bus"),
     PEDESTRIAN("Pedestrian"),
     ROUGHNESS("Roughness"),
+    POTHOLE("Pothole"),
+    SPEED_BREAKER("Speed Breaker"),
+    CONSTRUCTION("Construction"),
     FRICTION("Friction"),
     TURNING("Turning"),
     MARKET("Market")

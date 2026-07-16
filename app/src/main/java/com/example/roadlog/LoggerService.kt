@@ -217,7 +217,7 @@ class LoggerService : Service() {
 
     private fun prepareVoskModel() {
         Log.i(TAG, "Preparing Vosk offline model...")
-        voskRecognizer = VoskSpeechRecognizer(this)
+        voskRecognizer = VoskSpeechRecognizer(this, GrammarBuilder.buildGrammarJson())
         voskRecognizer?.prepare(
             onReady = {
                 Log.i(TAG, "Vosk model ready")

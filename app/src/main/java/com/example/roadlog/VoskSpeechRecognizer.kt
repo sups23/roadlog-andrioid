@@ -20,7 +20,10 @@ import org.vosk.android.StorageService
  * continuous audio, and we rely on Vosk's internal utterance segmentation
  * (no explicit reset between utterances).
  */
-class VoskSpeechRecognizer(private val context: Context) {
+class VoskSpeechRecognizer(
+    private val context: Context,
+    private val grammarJson: String? = null
+) {
 
     interface Callback {
         fun onReady()
@@ -63,7 +66,17 @@ class VoskSpeechRecognizer(private val context: Context) {
             { unpackedModel ->
                 model = unpackedModel
                 try {
-                    recognizer = Recognizer(unpackedModel, sampleRate.toFloat())
+                    // Use the grammar-constrained recognizer when a grammar is supplied.
+                    // This limits the decoder to only the phrases listed in the grammar,
+                    // which dramatically improves accuracy for a small, fixed command
+                    // vocabulary compared to the free-form English recognizer.
+                    recognizer = if (grammarJson != null) {
+                        Log.i(TAG, "Creating grammar-constrained Vosk recognizer")
+                        Recognizer(unpackedModel, sampleRate.toFloat(), grammarJson)
+                    } else {
+                        Log.i(TAG, "Creating free-form Vosk recognizer")
+                        Recognizer(unpackedModel, sampleRate.toFloat())
+                    }
                     isReady = true
                     Log.i(TAG, "Vosk model and recognizer ready")
                     onReady()

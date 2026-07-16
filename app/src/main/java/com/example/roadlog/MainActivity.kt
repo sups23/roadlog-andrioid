@@ -223,6 +223,9 @@ class MainActivity : AppCompatActivity() {
             "BUS" to findViewById(R.id.labelBus),
             "PEDESTRIAN" to findViewById(R.id.labelPedestrian),
             "ROUGHNESS" to findViewById(R.id.labelRoughness),
+            "POTHOLE" to findViewById(R.id.labelPothole),
+            "SPEED_BREAKER" to findViewById(R.id.labelSpeedBreaker),
+            "CONSTRUCTION" to findViewById(R.id.labelConstruction),
             "FRICTION" to findViewById(R.id.labelFriction),
             "TURNING" to findViewById(R.id.labelTurning),
             "MARKET" to findViewById(R.id.labelMarket)
