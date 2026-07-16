@@ -136,6 +136,13 @@ class TripDetailActivity : AppCompatActivity() {
 
         deleteButton.setOnClickListener { confirmDelete() }
 
+        if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
+            Log.e(TAG, "Invalid trip extras: tripId=$tripId, start=$tripStart, end=$tripEnd")
+            eventsText.text = "Error: invalid trip"
+            showLoading(false)
+            return
+        }
+
         loadTripDetails()
     }
 
@@ -173,11 +180,19 @@ class TripDetailActivity : AppCompatActivity() {
 
     private fun loadTripDetails() {
         showLoading(true)
+        Log.d(TAG, "Loading trip details: tripId=$tripId, start=$tripStart, end=$tripEnd")
         scope.launch {
             try {
                 val trip = withContext(Dispatchers.IO) {
                     database.tripDao().getTripById(tripId)
-                } ?: return@launch
+                }
+                if (trip == null) {
+                    Log.e(TAG, "Trip not found for id=$tripId")
+                    eventsText.text = "Trip not found"
+                    showLoading(false)
+                    return@launch
+                }
+                Log.d(TAG, "Trip found: id=${trip.id}, startMs=${trip.startTimeMs}, endMs=${trip.endTimeMs}")
 
                 val gpsData = withContext(Dispatchers.IO) {
                     database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
@@ -197,13 +212,19 @@ class TripDetailActivity : AppCompatActivity() {
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
                 }
+                Log.d(TAG, "Loaded counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
+                Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
                     computeWorldAccel(accelData, rotationData)
                 }
+                Log.d(TAG, "World accel computed: ${worldAccel.size} points")
+
+                Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
                     computeWorldGyro(gyroData, rotationData)
                 }
+                Log.d(TAG, "World gyro computed: ${worldGyro.size} points")
 
                 bindHeader(trip, gpsData)
                 bindBreakdown(trip.causeBreakdown)
@@ -217,6 +238,7 @@ class TripDetailActivity : AppCompatActivity() {
                 bindRoughnessSummary(worldAccel)
                 bindPhotos(photos)
 
+                Log.d(TAG, "Trip details ready, hiding loader")
                 showLoading(false)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load trip details", e)
