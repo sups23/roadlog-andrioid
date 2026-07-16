@@ -390,3 +390,4 @@
         android:indeterminate="true"
         android:visibility="visible" />
 </FrameLayout>
+</LinearLayout>
