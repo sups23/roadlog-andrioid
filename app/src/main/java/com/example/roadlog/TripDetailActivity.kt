@@ -10,6 +10,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -54,6 +56,8 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var yawChart: LineChart
     private lateinit var deleteButton: Button
     private lateinit var photosContainer: LinearLayout
+    private lateinit var contentScrollView: ScrollView
+    private lateinit var loadingProgressBar: ProgressBar
 
     private var tripId: Long = -1
     private var tripStart: Long = 0
@@ -99,6 +103,8 @@ class TripDetailActivity : AppCompatActivity() {
         yawChart = findViewById(R.id.yawChart)
         deleteButton = findViewById(R.id.deleteTripButton)
         photosContainer = findViewById(R.id.photosContainer)
+        contentScrollView = findViewById(R.id.contentScrollView)
+        loadingProgressBar = findViewById(R.id.loadingProgressBar)
 
         mapView = findViewById(R.id.detailMapView)
         mapView.setTileSource(TileSourceFactory.MAPNIK)
@@ -162,49 +168,63 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun loadTripDetails() {
+        showLoading(true)
         scope.launch {
-            val trip = withContext(Dispatchers.IO) {
-                database.tripDao().getTripById(tripId)
-            } ?: return@launch
+            try {
+                val trip = withContext(Dispatchers.IO) {
+                    database.tripDao().getTripById(tripId)
+                } ?: return@launch
 
-            val gpsData = withContext(Dispatchers.IO) {
-                database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
-            }
-            val events = withContext(Dispatchers.IO) {
-                database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
-            }
-            val accelData = withContext(Dispatchers.IO) {
-                database.tripDao().getAccelForTrip(tripId, tripStart, tripEnd)
-            }
-            val gyroData = withContext(Dispatchers.IO) {
-                database.tripDao().getGyroForTrip(tripId, tripStart, tripEnd)
-            }
-            val rotationData = withContext(Dispatchers.IO) {
-                database.tripDao().getRotationForTrip(tripId, tripStart, tripEnd)
-            }
-            val photos = withContext(Dispatchers.IO) {
-                database.tripDao().getPhotosForTrip(tripId)
-            }
+                val gpsData = withContext(Dispatchers.IO) {
+                    database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
+                }
+                val events = withContext(Dispatchers.IO) {
+                    database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
+                }
+                val accelData = withContext(Dispatchers.IO) {
+                    database.tripDao().getAccelForTrip(tripId, tripStart, tripEnd)
+                }
+                val gyroData = withContext(Dispatchers.IO) {
+                    database.tripDao().getGyroForTrip(tripId, tripStart, tripEnd)
+                }
+                val rotationData = withContext(Dispatchers.IO) {
+                    database.tripDao().getRotationForTrip(tripId, tripStart, tripEnd)
+                }
+                val photos = withContext(Dispatchers.IO) {
+                    database.tripDao().getPhotosForTrip(tripId)
+                }
 
-            val worldAccel = withContext(Dispatchers.Default) {
-                computeWorldAccel(accelData, rotationData)
-            }
-            val worldGyro = withContext(Dispatchers.Default) {
-                computeWorldGyro(gyroData, rotationData)
-            }
+                val worldAccel = withContext(Dispatchers.Default) {
+                    computeWorldAccel(accelData, rotationData)
+                }
+                val worldGyro = withContext(Dispatchers.Default) {
+                    computeWorldGyro(gyroData, rotationData)
+                }
 
-            bindHeader(trip, gpsData)
-            bindBreakdown(trip.causeBreakdown)
-            bindMap(gpsData, worldAccel)
-            bindTimeline(events, trip.startTimeMs)
-            bindSpeedChart(gpsData)
-            bindRoughnessChart(worldAccel)
-            bindLateralChart(worldAccel)
-            bindLongitudinalChart(worldAccel)
-            bindYawChart(worldGyro)
-            bindRoughnessSummary(worldAccel)
-            bindPhotos(photos)
+                bindHeader(trip, gpsData)
+                bindBreakdown(trip.causeBreakdown)
+                bindMap(gpsData, worldAccel)
+                bindTimeline(events, trip.startTimeMs)
+                bindSpeedChart(gpsData)
+                bindRoughnessChart(worldAccel)
+                bindLateralChart(worldAccel)
+                bindLongitudinalChart(worldAccel)
+                bindYawChart(worldGyro)
+                bindRoughnessSummary(worldAccel)
+                bindPhotos(photos)
+
+                showLoading(false)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load trip details", e)
+                showLoading(false)
+                eventsText.text = "Error loading trip details"
+            }
         }
+    }
+
+    private fun showLoading(isLoading: Boolean) {
+        loadingProgressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
+        contentScrollView.visibility = if (isLoading) View.GONE else View.VISIBLE
     }
 
     private fun bindHeader(trip: Trip, gpsData: List<TripData>) {

@@ -14,17 +14,23 @@
         app:title="Trip Details"
         app:titleTextColor="@android:color/white" />
 
-    <ScrollView
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true">
+        android:layout_weight="1">
 
-        <LinearLayout
+        <ScrollView
+            android:id="@+id/contentScrollView"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
 
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"
@@ -43,7 +49,6 @@
                         android:id="@+id/detailDateText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Jul 10, 2026 · 10:32 AM"
                         android:textSize="18sp"
                         android:textStyle="bold" />
 
@@ -52,7 +57,6 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:text="Duration: 24 min"
                         android:textSize="15sp" />
 
                     <TextView
@@ -60,7 +64,6 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Distance: 3.4 km"
                         android:textSize="15sp" />
 
                     <TextView
@@ -68,7 +71,6 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Avg speed: 21 km/h · Max: 45 km/h"
                         android:textSize="15sp" />
 
                     <TextView
@@ -76,7 +78,6 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Events: 12"
                         android:textSize="15sp" />
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
@@ -135,7 +136,6 @@
                         android:id="@+id/detailRoughnessText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="No roughness data"
                         android:textSize="15sp" />
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
@@ -381,4 +381,12 @@
                 android:textSize="16sp" />
         </LinearLayout>
     </ScrollView>
-</LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/loadingProgressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:indeterminate="true"
+        android:visibility="visible" />
+</FrameLayout>
