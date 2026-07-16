@@ -247,6 +247,9 @@ class MainActivity : AppCompatActivity() {
                 text = cause.shortForm
                 setTextAppearance(R.style.CauseLabel)
                 gravity = Gravity.CENTER
+                setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.gray))
+                isClickable = true
+                isFocusable = true
                 layoutParams = GridLayout.LayoutParams().apply {
                     width = (columnWidthDp * displayMetrics.density).toInt()
                     height = TypedValue.applyDimension(
