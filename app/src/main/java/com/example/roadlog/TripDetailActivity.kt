@@ -177,43 +177,36 @@ class TripDetailActivity : AppCompatActivity() {
                     database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
                 }
                 val accelData = withContext(Dispatchers.IO) {
-                    database.tripDao().getAccelForTripCapped(tripId, tripStart, tripEnd, 500)
+                    database.tripDao().getAccelForTrip(tripId, tripStart, tripEnd)
                 }
                 val gyroData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGyroForTripCapped(tripId, tripStart, tripEnd, 500)
+                    database.tripDao().getGyroForTrip(tripId, tripStart, tripEnd)
                 }
                 val rotationData = withContext(Dispatchers.IO) {
-                    database.tripDao().getRotationForTripCapped(tripId, tripStart, tripEnd, 500)
+                    database.tripDao().getRotationForTrip(tripId, tripStart, tripEnd)
                 }
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
                 }
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
-                val downsampleStart = System.currentTimeMillis()
-                val displayGps = downsampleToCount(gpsData, 200)
-                val displayAccel = downsampleToRate(accelData, 1000L)
-                val displayGyro = downsampleToRate(gyroData, 1000L)
-                val displayRotation = downsampleToRate(rotationData, 1000L)
-                Log.d(TAG, "Downsampled: gps=${displayGps.size}, accel=${displayAccel.size}, gyro=${displayGyro.size}, rotation=${displayRotation.size} in ${System.currentTimeMillis() - downsampleStart}ms")
-
                 val fusionStart = System.currentTimeMillis()
                 Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
-                    computeWorldAccel(displayAccel, displayRotation)
+                    computeWorldAccel(accelData, rotationData)
                 }
                 Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
-                    computeWorldGyro(displayGyro, displayRotation)
+                    computeWorldGyro(gyroData, rotationData)
                 }
                 Log.d(TAG, "Sensor fusion took ${System.currentTimeMillis() - fusionStart}ms")
 
                 val bindStart = System.currentTimeMillis()
                 Log.d(TAG, "Binding UI...")
-                bindHeader(trip, displayGps)
+                bindHeader(trip, gpsData)
                 bindBreakdown(trip.causeBreakdown)
                 bindTimeline(events, trip.startTimeMs)
-                bindSpeedChart(displayGps)
+                bindSpeedChart(gpsData)
                 bindRoughnessChart(worldAccel)
                 bindLateralChart(worldAccel)
                 bindLongitudinalChart(worldAccel)
