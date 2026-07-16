@@ -74,6 +74,7 @@ class TripDetailActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate")
 
         Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
         Configuration.getInstance().userAgentValue = "RoadLog/1.0 (com.example.roadlog)"
@@ -148,16 +149,24 @@ class TripDetailActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        Log.d(TAG, "onResume")
         mapView.onResume()
     }
 
     override fun onPause() {
         super.onPause()
+        Log.d(TAG, "onPause")
         mapView.onPause()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.d(TAG, "onStop")
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.d(TAG, "onDestroy")
         scope.cancel()
     }
 
@@ -183,9 +192,11 @@ class TripDetailActivity : AppCompatActivity() {
         Log.d(TAG, "Loading trip details: tripId=$tripId, start=$tripStart, end=$tripEnd")
         scope.launch {
             try {
+                val tripLoadStart = System.currentTimeMillis()
                 val trip = withContext(Dispatchers.IO) {
                     database.tripDao().getTripById(tripId)
                 }
+                Log.d(TAG, "getTripById took ${System.currentTimeMillis() - tripLoadStart}ms")
                 if (trip == null) {
                     Log.e(TAG, "Trip not found for id=$tripId")
                     eventsText.text = "Trip not found"
@@ -194,6 +205,7 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 Log.d(TAG, "Trip found: id=${trip.id}, startMs=${trip.startTimeMs}, endMs=${trip.endTimeMs}")
 
+                val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
                     database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
                 }
@@ -212,20 +224,21 @@ class TripDetailActivity : AppCompatActivity() {
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
                 }
-                Log.d(TAG, "Loaded counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
+                Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
+                val fusionStart = System.currentTimeMillis()
                 Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
                     computeWorldAccel(accelData, rotationData)
                 }
-                Log.d(TAG, "World accel computed: ${worldAccel.size} points")
-
                 Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
                     computeWorldGyro(gyroData, rotationData)
                 }
-                Log.d(TAG, "World gyro computed: ${worldGyro.size} points")
+                Log.d(TAG, "Sensor fusion took ${System.currentTimeMillis() - fusionStart}ms")
 
+                val bindStart = System.currentTimeMillis()
+                Log.d(TAG, "Binding UI...")
                 bindHeader(trip, gpsData)
                 bindBreakdown(trip.causeBreakdown)
                 bindMap(gpsData, worldAccel)
@@ -237,6 +250,7 @@ class TripDetailActivity : AppCompatActivity() {
                 bindYawChart(worldGyro)
                 bindRoughnessSummary(worldAccel)
                 bindPhotos(photos)
+                Log.d(TAG, "UI binding took ${System.currentTimeMillis() - bindStart}ms")
 
                 Log.d(TAG, "Trip details ready, hiding loader")
                 showLoading(false)
@@ -249,11 +263,13 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun showLoading(isLoading: Boolean) {
+        Log.d(TAG, "showLoading: $isLoading")
         loadingProgressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
         contentScrollView.visibility = if (isLoading) View.GONE else View.VISIBLE
     }
 
     private fun bindHeader(trip: Trip, gpsData: List<TripData>) {
+        Log.d(TAG, "bindHeader: gps=${gpsData.size}")
         dateText.text = dateFormatter.format(Date(trip.startTimeMs))
 
         val minutes = TimeUnit.MILLISECONDS.toMinutes(trip.endTimeMs - trip.startTimeMs)
@@ -281,6 +297,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindBreakdown(causeBreakdown: String) {
+        Log.d(TAG, "bindBreakdown: $causeBreakdown")
         breakdownContainer.removeAllViews()
         try {
             val json = org.json.JSONObject(causeBreakdown)
@@ -320,6 +337,8 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindMap(gpsData: List<TripData>, worldAccel: List<WorldAccelSample>) {
+        Log.d(TAG, "bindMap: gps=${gpsData.size}, worldAccel=${worldAccel.size}")
+        val mapStart = System.currentTimeMillis()
         mapView.overlays.clear()
 
         if (gpsData.isEmpty()) {
@@ -377,6 +396,7 @@ class TripDetailActivity : AppCompatActivity() {
         }
 
         mapView.invalidate()
+        Log.d(TAG, "bindMap done in ${System.currentTimeMillis() - mapStart}ms")
     }
 
     private fun getMarkerDrawable(colorRes: Int): Drawable? {
@@ -390,6 +410,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindTimeline(events: List<TripData>, tripStartMs: Long) {
+        Log.d(TAG, "bindTimeline: events=${events.size}")
         timelineContainer.removeAllViews()
         if (events.isEmpty()) {
             val emptyText = TextView(this).apply {
@@ -418,6 +439,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindSpeedChart(gpsData: List<TripData>) {
+        Log.d(TAG, "bindSpeedChart: gps=${gpsData.size}")
         if (gpsData.isEmpty()) {
             speedChart.clear()
             return
@@ -441,6 +463,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindRoughnessChart(worldAccel: List<WorldAccelSample>) {
+        Log.d(TAG, "bindRoughnessChart: worldAccel=${worldAccel.size}")
         if (worldAccel.isEmpty()) {
             roughnessChart.clear()
             return
@@ -469,6 +492,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindLateralChart(worldAccel: List<WorldAccelSample>) {
+        Log.d(TAG, "bindLateralChart: worldAccel=${worldAccel.size}")
         if (worldAccel.isEmpty()) {
             lateralChart.clear()
             return
@@ -489,6 +513,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindLongitudinalChart(worldAccel: List<WorldAccelSample>) {
+        Log.d(TAG, "bindLongitudinalChart: worldAccel=${worldAccel.size}")
         if (worldAccel.isEmpty()) {
             longitudinalChart.clear()
             return
@@ -509,6 +534,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindYawChart(worldGyro: List<WorldGyroSample>) {
+        Log.d(TAG, "bindYawChart: worldGyro=${worldGyro.size}")
         if (worldGyro.isEmpty()) {
             yawChart.clear()
             return
@@ -529,6 +555,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindRoughnessSummary(worldAccel: List<WorldAccelSample>) {
+        Log.d(TAG, "bindRoughnessSummary: worldAccel=${worldAccel.size}")
         if (worldAccel.isEmpty()) {
             roughnessText.text = "No accelerometer data for this trip"
             return
@@ -566,6 +593,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun bindPhotos(photos: List<TripPhoto>) {
+        Log.d(TAG, "bindPhotos: photos=${photos.size}")
         photosContainer.removeAllViews()
         photoMarkers.forEach { mapView.overlays.remove(it) }
         photoMarkers.clear()

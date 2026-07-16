@@ -1,7 +1,10 @@
 package com.example.roadlog
 
 import android.hardware.SensorManager
+import android.util.Log
 import kotlin.math.sqrt
+
+private const val TAG = "RoadLog"
 
 /**
  * World-frame sensor samples derived from raw accelerometer/gyroscope data
@@ -35,9 +38,11 @@ fun computeWorldAccel(
     accelData: List<TripData>,
     rotationData: List<TripData>
 ): List<WorldAccelSample> {
+    Log.d(TAG, "computeWorldAccel start: accel=${accelData.size}, rotation=${rotationData.size}")
+    val start = System.currentTimeMillis()
     if (rotationData.isEmpty()) {
         // No orientation data: assume phone is flat and only vertical (raw Z) is useful.
-        return accelData.map {
+        val result = accelData.map {
             WorldAccelSample(
                 timestamp = it.timestamp,
                 vertical = (it.accelZ ?: 0f) - GRAVITY,
@@ -45,6 +50,8 @@ fun computeWorldAccel(
                 longitudinal = it.accelY ?: 0f
             )
         }
+        Log.d(TAG, "computeWorldAccel done (no rotation): ${result.size} points in ${System.currentTimeMillis() - start}ms")
+        return result
     }
 
     val result = mutableListOf<WorldAccelSample>()
@@ -76,6 +83,7 @@ fun computeWorldAccel(
         )
     }
 
+    Log.d(TAG, "computeWorldAccel done: ${result.size} points in ${System.currentTimeMillis() - start}ms")
     return result
 }
 
@@ -86,13 +94,17 @@ fun computeWorldGyro(
     gyroData: List<TripData>,
     rotationData: List<TripData>
 ): List<WorldGyroSample> {
+    Log.d(TAG, "computeWorldGyro start: gyro=${gyroData.size}, rotation=${rotationData.size}")
+    val start = System.currentTimeMillis()
     if (rotationData.isEmpty()) {
-        return gyroData.map {
+        val result = gyroData.map {
             WorldGyroSample(
                 timestamp = it.timestamp,
                 yaw = it.gyroZ ?: 0f
             )
         }
+        Log.d(TAG, "computeWorldGyro done (no rotation): ${result.size} points in ${System.currentTimeMillis() - start}ms")
+        return result
     }
 
     val result = mutableListOf<WorldGyroSample>()
@@ -119,6 +131,7 @@ fun computeWorldGyro(
         )
     }
 
+    Log.d(TAG, "computeWorldGyro done: ${result.size} points in ${System.currentTimeMillis() - start}ms")
     return result
 }
 
