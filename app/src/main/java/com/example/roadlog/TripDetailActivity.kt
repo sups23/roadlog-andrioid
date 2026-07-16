@@ -1,7 +1,9 @@
 package com.example.roadlog
 
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -17,6 +19,14 @@ import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import kotlinx.coroutines.*
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -28,6 +38,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private lateinit var database: AppDatabase
+    private lateinit var mapView: MapView
 
     private lateinit var dateText: TextView
     private lateinit var durationText: TextView
@@ -57,6 +68,12 @@ class TripDetailActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate")
 
+        Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
+        Configuration.getInstance().userAgentValue = "RoadLog/1.0 (com.example.roadlog)"
+        Configuration.getInstance().osmdroidBasePath = filesDir
+        Configuration.getInstance().osmdroidTileCache = File(filesDir, "tiles")
+        Configuration.getInstance().osmdroidTileCache.mkdirs()
+
         setContentView(R.layout.activity_trip_detail)
 
         setSupportActionBar(findViewById(R.id.toolbar))
@@ -76,6 +93,7 @@ class TripDetailActivity : AppCompatActivity() {
         breakdownContainer = findViewById(R.id.breakdownContainer)
         timelineContainer = findViewById(R.id.timelineContainer)
         speedChart = findViewById(R.id.speedChart)
+        mapView = findViewById(R.id.detailMapView)
         roughnessChart = findViewById(R.id.roughnessChart)
         lateralChart = findViewById(R.id.lateralChart)
         longitudinalChart = findViewById(R.id.longitudinalChart)
@@ -89,6 +107,23 @@ class TripDetailActivity : AppCompatActivity() {
         setupChart(lateralChart, "Lateral acceleration (m/s²)")
         setupChart(longitudinalChart, "Longitudinal acceleration (m/s²)")
         setupChart(yawChart, "Yaw rate (rad/s)")
+
+        mapView.setTileSource(TileSourceFactory.MAPNIK)
+        mapView.setMultiTouchControls(true)
+        mapView.setTilesScaledToDpi(true)
+        mapView.setUseDataConnection(true)
+        mapView.setMinZoomLevel(3.0)
+        mapView.setMaxZoomLevel(19.0)
+
+        // Prevent ScrollView from stealing map drags.
+        mapView.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> v.parent.requestDisallowInterceptTouchEvent(true)
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> v.parent.requestDisallowInterceptTouchEvent(false)
+            }
+            false
+        }
 
         deleteButton.setOnClickListener { confirmDelete() }
         showLoading(true)
@@ -106,11 +141,13 @@ class TripDetailActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume")
+        mapView.onResume()
     }
 
     override fun onPause() {
         super.onPause()
         Log.d(TAG, "onPause")
+        mapView.onPause()
     }
 
     override fun onStop() {
@@ -200,6 +237,7 @@ class TripDetailActivity : AppCompatActivity() {
                 bindHeader(trip, displayGps)
                 bindBreakdown(trip.causeBreakdown)
                 bindTimeline(events, trip.startTimeMs)
+                bindMap(displayGps)
                 bindSpeedChart(displayGps)
                 bindRoughnessChart(worldAccel)
                 bindLateralChart(worldAccel)
@@ -453,6 +491,66 @@ class TripDetailActivity : AppCompatActivity() {
         }
         yawChart.data = LineData(dataSet)
         yawChart.invalidate()
+    }
+
+    private fun bindMap(gpsData: List<TripData>) {
+        Log.d(TAG, "bindMap: gps=${gpsData.size}")
+        val mapStart = System.currentTimeMillis()
+        mapView.overlays.clear()
+
+        if (gpsData.isEmpty()) {
+            mapView.visibility = View.GONE
+            return
+        }
+        mapView.visibility = View.VISIBLE
+
+        val points = gpsData.map { GeoPoint(it.latitude ?: 0.0, it.longitude ?: 0.0) }
+
+        val route = Polyline().apply {
+            outlinePaint.color = ContextCompat.getColor(this@TripDetailActivity, R.color.teal_700)
+            outlinePaint.strokeWidth = 8f
+            setPoints(points)
+        }
+        mapView.overlays.add(route)
+
+        // Add start and end markers
+        val startMarker = Marker(mapView).apply {
+            position = points.first()
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            title = "Start"
+            icon = getMarkerDrawable(android.R.color.holo_green_dark)
+        }
+        val endMarker = Marker(mapView).apply {
+            position = points.last()
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            title = "End"
+            icon = getMarkerDrawable(android.R.color.holo_red_dark)
+        }
+        mapView.overlays.add(startMarker)
+        mapView.overlays.add(endMarker)
+
+        if (points.size > 1) {
+            val boundingBox = BoundingBox.fromGeoPoints(points)
+            mapView.post {
+                mapView.zoomToBoundingBox(boundingBox, false, 64)
+            }
+        } else {
+            mapView.controller.setZoom(16.0)
+            mapView.controller.setCenter(points.first())
+        }
+
+        mapView.invalidate()
+        Log.d(TAG, "bindMap done in ${System.currentTimeMillis() - mapStart}ms")
+    }
+
+    private fun getMarkerDrawable(colorRes: Int): Drawable? {
+        return try {
+            val drawable = ContextCompat.getDrawable(this, R.drawable.ic_marker_circle)
+            drawable?.setTint(ContextCompat.getColor(this, colorRes))
+            drawable
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun confirmDelete() {
