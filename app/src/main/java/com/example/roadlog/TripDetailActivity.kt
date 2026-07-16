@@ -38,6 +38,10 @@ import kotlin.math.sqrt
 
 class TripDetailActivity : AppCompatActivity() {
 
+    companion object {
+        private const val TAG = "RoadLog"
+    }
+
     private lateinit var database: AppDatabase
     private lateinit var mapView: MapView
 
