@@ -20,7 +20,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
-import android.widget.GridLayout
+import android.widget.LinearLayout
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -234,41 +234,64 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        val gridLayout = findViewById<GridLayout>(R.id.causeLabelsGrid)
+        Log.i(TAG, "Loaded ${causeConfig.causes.size} causes for UI: ${causeConfig.causes.map { it.code }}")
+
+        val container = findViewById<LinearLayout>(R.id.causeLabelsContainer)
         val labels = mutableMapOf<String, TextView>()
         val displayMetrics = resources.displayMetrics
-        val screenWidthDp = displayMetrics.widthPixels / displayMetrics.density
+        val labelHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 56f, displayMetrics).toInt()
+        val marginPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 4f, displayMetrics).toInt()
         val columnCount = 3
-        val columnWidthDp = (screenWidthDp / columnCount).toInt()
 
-        causeConfig.causes.forEach { cause ->
-            val label = TextView(this).apply {
-                id = View.generateViewId()
-                text = cause.shortForm
-                setTextAppearance(R.style.CauseLabel)
-                gravity = Gravity.CENTER
-                setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.gray))
-                isClickable = true
-                isFocusable = true
-                layoutParams = GridLayout.LayoutParams().apply {
-                    width = (columnWidthDp * displayMetrics.density).toInt()
-                    height = TypedValue.applyDimension(
-                        TypedValue.COMPLEX_UNIT_DIP,
-                        56f,
-                        displayMetrics
-                    ).toInt()
-                    setMargins(4, 8, 4, 0)
-                    columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                }
-                setOnClickListener {
-                    sendCauseToService(cause.code)
-                    highlightCause(cause.code)
-                    lastMatchedCause = cause.code
-                    updateCauseHeardLine()
-                }
+        causeConfig.causes.chunked(columnCount).forEach { rowCauses ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                weightSum = columnCount.toFloat()
             }
-            gridLayout.addView(label)
-            labels[cause.code] = label
+
+            rowCauses.forEach { cause ->
+                val label = TextView(this).apply {
+                    id = View.generateViewId()
+                    text = cause.shortForm
+                    setTextAppearance(R.style.CauseLabel)
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.gray))
+                    setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
+                    isClickable = true
+                    isFocusable = true
+                    layoutParams = LinearLayout.LayoutParams(
+                        0,
+                        labelHeight,
+                        1f
+                    ).apply {
+                        setMargins(marginPx, marginPx * 2, marginPx, 0)
+                    }
+                    setOnClickListener {
+                        sendCauseToService(cause.code)
+                        highlightCause(cause.code)
+                        lastMatchedCause = cause.code
+                        updateCauseHeardLine()
+                    }
+                }
+                row.addView(label)
+                labels[cause.code] = label
+            }
+
+            // Fill remaining slots in the last row with invisible placeholders so weights line up.
+            repeat(columnCount - rowCauses.size) {
+                val placeholder = View(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, labelHeight, 1f).apply {
+                        setMargins(marginPx, marginPx * 2, marginPx, 0)
+                    }
+                }
+                row.addView(placeholder)
+            }
+
+            container.addView(row)
         }
         causeLabels = labels
 

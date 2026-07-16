@@ -41,11 +41,11 @@
             android:text="Ready to record"
             android:textSize="16sp" />
 
-        <GridLayout
-            android:id="@+id/causeLabelsGrid"
+        <LinearLayout
+            android:id="@+id/causeLabelsContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:columnCount="3" />
+            android:orientation="vertical" />
 
         <TextView
             android:id="@+id/lastSpokenText"
