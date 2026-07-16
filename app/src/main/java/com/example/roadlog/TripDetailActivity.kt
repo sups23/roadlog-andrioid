@@ -136,7 +136,6 @@ class TripDetailActivity : AppCompatActivity() {
         setupChart(yawChart, "Yaw rate (rad/s)")
 
         deleteButton.setOnClickListener { confirmDelete() }
-        showLoading(true)
 
         if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
             Log.e(TAG, "Invalid trip extras: tripId=$tripId, start=$tripStart, end=$tripEnd")
@@ -272,15 +271,26 @@ class TripDetailActivity : AppCompatActivity() {
 
     private fun showLoading(isLoading: Boolean) {
         Log.d(TAG, "showLoading: $isLoading")
-        loadingProgressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
-        contentScrollView.visibility = if (isLoading) View.GONE else View.VISIBLE
-        contentScrollView.requestLayout()
-        contentScrollView.invalidate()
-        if (!isLoading) {
-            contentScrollView.bringToFront()
+        if (isLoading) {
+            contentScrollView.visibility = View.GONE
+            loadingProgressBar.visibility = View.VISIBLE
+        } else {
+            loadingProgressBar.visibility = View.GONE
+            contentScrollView.visibility = View.VISIBLE
         }
+        val parent = contentScrollView.parent as? View
+        parent?.requestLayout()
+        parent?.postInvalidate()
         contentScrollView.post {
-            Log.d(TAG, "showLoading posted: scrollVisible=${contentScrollView.visibility == View.VISIBLE}, progressVisible=${loadingProgressBar.visibility == View.VISIBLE}")
+            val scrollVisible = contentScrollView.visibility == View.VISIBLE
+            val progressVisible = loadingProgressBar.visibility == View.VISIBLE
+            Log.d(TAG, "showLoading posted: scrollVisible=$scrollVisible, progressVisible=$progressVisible")
+            if (!isLoading && (!scrollVisible || progressVisible)) {
+                Log.w(TAG, "Forcing visibility: scroll=visible, progress=gone")
+                contentScrollView.visibility = View.VISIBLE
+                loadingProgressBar.visibility = View.GONE
+                (contentScrollView.parent as? View)?.requestLayout()
+            }
         }
     }
 
