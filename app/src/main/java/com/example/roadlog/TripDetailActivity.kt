@@ -136,6 +136,7 @@ class TripDetailActivity : AppCompatActivity() {
         setupChart(yawChart, "Yaw rate (rad/s)")
 
         deleteButton.setOnClickListener { confirmDelete() }
+        showLoading(true)
 
         if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
             Log.e(TAG, "Invalid trip extras: tripId=$tripId, start=$tripStart, end=$tripEnd")
@@ -226,24 +227,31 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
+                val downsampleStart = System.currentTimeMillis()
+                val displayGps = downsampleToCount(gpsData, 500)
+                val displayAccel = downsampleToRate(accelData, 1000L)
+                val displayGyro = downsampleToRate(gyroData, 1000L)
+                val displayRotation = downsampleToRate(rotationData, 1000L)
+                Log.d(TAG, "Downsampled: gps=${displayGps.size}, accel=${displayAccel.size}, gyro=${displayGyro.size}, rotation=${displayRotation.size} in ${System.currentTimeMillis() - downsampleStart}ms")
+
                 val fusionStart = System.currentTimeMillis()
                 Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
-                    computeWorldAccel(accelData, rotationData)
+                    computeWorldAccel(displayAccel, displayRotation)
                 }
                 Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
-                    computeWorldGyro(gyroData, rotationData)
+                    computeWorldGyro(displayGyro, displayRotation)
                 }
                 Log.d(TAG, "Sensor fusion took ${System.currentTimeMillis() - fusionStart}ms")
 
                 val bindStart = System.currentTimeMillis()
                 Log.d(TAG, "Binding UI...")
-                bindHeader(trip, gpsData)
+                bindHeader(trip, displayGps)
                 bindBreakdown(trip.causeBreakdown)
-                bindMap(gpsData, worldAccel)
+                bindMap(displayGps, worldAccel)
                 bindTimeline(events, trip.startTimeMs)
-                bindSpeedChart(gpsData)
+                bindSpeedChart(displayGps)
                 bindRoughnessChart(worldAccel)
                 bindLateralChart(worldAccel)
                 bindLongitudinalChart(worldAccel)
@@ -266,6 +274,14 @@ class TripDetailActivity : AppCompatActivity() {
         Log.d(TAG, "showLoading: $isLoading")
         loadingProgressBar.visibility = if (isLoading) View.VISIBLE else View.GONE
         contentScrollView.visibility = if (isLoading) View.GONE else View.VISIBLE
+        contentScrollView.requestLayout()
+        contentScrollView.invalidate()
+        if (!isLoading) {
+            contentScrollView.bringToFront()
+        }
+        contentScrollView.post {
+            Log.d(TAG, "showLoading posted: scrollVisible=${contentScrollView.visibility == View.VISIBLE}, progressVisible=${loadingProgressBar.visibility == View.VISIBLE}")
+        }
     }
 
     private fun bindHeader(trip: Trip, gpsData: List<TripData>) {
@@ -349,14 +365,7 @@ class TripDetailActivity : AppCompatActivity() {
 
         val points = gpsData.map { GeoPoint(it.latitude ?: 0.0, it.longitude ?: 0.0) }
 
-        val segmentRoughness = mutableListOf<Double>()
-        for (i in 1 until gpsData.size) {
-            val prev = gpsData[i - 1]
-            val curr = gpsData[i]
-            val samples = worldAccel.filter { it.timestamp in prev.timestamp..curr.timestamp }
-            segmentRoughness.add(roughnessOfWorldVertical(samples))
-        }
-
+        val segmentRoughness = computeSegmentRoughness(gpsData, worldAccel)
         val maxRoughness = segmentRoughness.maxOrNull() ?: 0.0
         val minRoughness = 0.0
 
@@ -397,6 +406,37 @@ class TripDetailActivity : AppCompatActivity() {
 
         mapView.invalidate()
         Log.d(TAG, "bindMap done in ${System.currentTimeMillis() - mapStart}ms")
+    }
+
+    private fun computeSegmentRoughness(
+        gpsData: List<TripData>,
+        worldAccel: List<WorldAccelSample>
+    ): List<Double> {
+        val roughness = MutableList(gpsData.size - 1) { 0.0 }
+        if (worldAccel.isEmpty() || gpsData.size < 2) return roughness
+
+        val sums = DoubleArray(gpsData.size - 1)
+        val counts = IntArray(gpsData.size - 1)
+        var segmentIndex = 0
+
+        for (sample in worldAccel) {
+            // Advance to the segment that contains this sample's timestamp.
+            while (segmentIndex < gpsData.size - 2 && sample.timestamp > gpsData[segmentIndex + 1].timestamp) {
+                segmentIndex++
+            }
+            val start = gpsData[segmentIndex].timestamp
+            val end = gpsData[segmentIndex + 1].timestamp
+            if (sample.timestamp in start..end) {
+                val v = sample.vertical.toDouble()
+                sums[segmentIndex] += v * v
+                counts[segmentIndex]++
+            }
+        }
+
+        for (i in roughness.indices) {
+            roughness[i] = if (counts[i] > 0) sqrt(sums[i] / counts[i]) else 0.0
+        }
+        return roughness
     }
 
     private fun getMarkerDrawable(colorRes: Int): Drawable? {

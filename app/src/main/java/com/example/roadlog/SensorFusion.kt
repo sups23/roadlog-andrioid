@@ -136,6 +136,32 @@ fun computeWorldGyro(
 }
 
 /**
+ * Downsample a list by picking evenly spaced items.
+ * Preserves first and last items.
+ */
+fun <T> downsampleToCount(items: List<T>, maxCount: Int): List<T> {
+    if (items.size <= maxCount || maxCount <= 2) return items
+    val step = (items.size - 1).toDouble() / (maxCount - 1)
+    return (0 until maxCount).map { items[(it * step).toInt().coerceIn(0, items.lastIndex)] }
+}
+
+/**
+ * Downsample sensor rows so consecutive rows are at least [targetIntervalMs] apart.
+ */
+fun downsampleToRate(samples: List<TripData>, targetIntervalMs: Long): List<TripData> {
+    if (samples.isEmpty() || targetIntervalMs <= 0) return samples
+    val result = mutableListOf<TripData>()
+    var lastTimestamp = Long.MIN_VALUE
+    for (sample in samples) {
+        if (sample.timestamp - lastTimestamp >= targetIntervalMs) {
+            result.add(sample)
+            lastTimestamp = sample.timestamp
+        }
+    }
+    return result
+}
+
+/**
  * Group samples into 1-second bins and compute RMS per bin.
  * Returns a sorted map of elapsed-second -> RMS value.
  */
