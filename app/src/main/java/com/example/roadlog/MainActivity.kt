@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -248,7 +249,11 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
                 layoutParams = GridLayout.LayoutParams().apply {
                     width = (columnWidthDp * displayMetrics.density).toInt()
-                    height = GridLayout.LayoutParams.WRAP_CONTENT
+                    height = TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        56f,
+                        displayMetrics
+                    ).toInt()
                     setMargins(4, 8, 4, 0)
                     columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
                 }
