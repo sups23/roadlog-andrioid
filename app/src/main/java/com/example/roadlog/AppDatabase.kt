@@ -103,6 +103,18 @@ interface TripDao {
     @Query("SELECT * FROM trip_data WHERE (tripId = :tripId OR tripId = 0) AND timestamp BETWEEN :fromMs AND :toMs AND rotW IS NOT NULL ORDER BY timestamp")
     suspend fun getRotationForTrip(tripId: Long, fromMs: Long, toMs: Long): List<TripData>
 
+    @Query("SELECT * FROM trip_data WHERE (tripId = :tripId OR tripId = 0) AND timestamp BETWEEN :fromMs AND :toMs AND latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY timestamp LIMIT :limit")
+    suspend fun getGpsForTripCapped(tripId: Long, fromMs: Long, toMs: Long, limit: Int): List<TripData>
+
+    @Query("SELECT * FROM trip_data WHERE (tripId = :tripId OR tripId = 0) AND timestamp BETWEEN :fromMs AND :toMs AND accelZ IS NOT NULL ORDER BY timestamp LIMIT :limit")
+    suspend fun getAccelForTripCapped(tripId: Long, fromMs: Long, toMs: Long, limit: Int): List<TripData>
+
+    @Query("SELECT * FROM trip_data WHERE (tripId = :tripId OR tripId = 0) AND timestamp BETWEEN :fromMs AND :toMs AND gyroX IS NOT NULL ORDER BY timestamp LIMIT :limit")
+    suspend fun getGyroForTripCapped(tripId: Long, fromMs: Long, toMs: Long, limit: Int): List<TripData>
+
+    @Query("SELECT * FROM trip_data WHERE (tripId = :tripId OR tripId = 0) AND timestamp BETWEEN :fromMs AND :toMs AND rotW IS NOT NULL ORDER BY timestamp LIMIT :limit")
+    suspend fun getRotationForTripCapped(tripId: Long, fromMs: Long, toMs: Long, limit: Int): List<TripData>
+
     @Query("DELETE FROM trips WHERE id = :tripId")
     suspend fun deleteTrip(tripId: Long)
 

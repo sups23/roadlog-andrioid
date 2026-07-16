@@ -1,6 +1,5 @@
 package com.example.roadlog
 
-import android.animation.ArgbEvaluator
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Drawable
 import android.os.Bundle
@@ -33,8 +32,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
-import kotlin.math.pow
-import kotlin.math.sqrt
 
 class TripDetailActivity : AppCompatActivity() {
 
@@ -208,19 +205,19 @@ class TripDetailActivity : AppCompatActivity() {
 
                 val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getGpsForTripCapped(tripId, tripStart, tripEnd, 500)
                 }
                 val events = withContext(Dispatchers.IO) {
                     database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
                 }
                 val accelData = withContext(Dispatchers.IO) {
-                    database.tripDao().getAccelForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getAccelForTripCapped(tripId, tripStart, tripEnd, 500)
                 }
                 val gyroData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGyroForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getGyroForTripCapped(tripId, tripStart, tripEnd, 500)
                 }
                 val rotationData = withContext(Dispatchers.IO) {
-                    database.tripDao().getRotationForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getRotationForTripCapped(tripId, tripStart, tripEnd, 500)
                 }
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
@@ -262,6 +259,7 @@ class TripDetailActivity : AppCompatActivity() {
 
                 Log.d(TAG, "Trip details ready, hiding loader")
                 showLoading(false)
+                invalidateChartsAndMap()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load trip details", e)
                 showLoading(false)
@@ -376,33 +374,13 @@ class TripDetailActivity : AppCompatActivity() {
 
         val points = gpsData.map { GeoPoint(it.latitude ?: 0.0, it.longitude ?: 0.0) }
 
-        val segmentRoughness = computeSegmentRoughness(gpsData, worldAccel)
-        val maxRoughness = segmentRoughness.maxOrNull() ?: 0.0
-        val minRoughness = 0.0
-
-        // Group consecutive segments with the same color to reduce overlay count.
-        var groupStart = 0
-        var groupColor = roughnessColor(segmentRoughness.firstOrNull() ?: 0.0, minRoughness, maxRoughness)
-        for (i in 1 until segmentRoughness.size) {
-            val color = roughnessColor(segmentRoughness[i], minRoughness, maxRoughness)
-            if (color != groupColor) {
-                val segment = Polyline().apply {
-                    outlinePaint.color = groupColor
-                    outlinePaint.strokeWidth = 8f
-                    setPoints(points.subList(groupStart, i + 1))
-                }
-                mapView.overlays.add(segment)
-                groupStart = i
-                groupColor = color
-            }
-        }
-        // Final group
-        val segment = Polyline().apply {
-            outlinePaint.color = groupColor
+        // Single polyline for the route (color-coded segments disabled for performance).
+        val route = Polyline().apply {
+            outlinePaint.color = ContextCompat.getColor(this@TripDetailActivity, R.color.teal_700)
             outlinePaint.strokeWidth = 8f
-            setPoints(points.subList(groupStart, points.size))
+            setPoints(points)
         }
-        mapView.overlays.add(segment)
+        mapView.overlays.add(route)
 
         // Add start and end markers
         val startMarker = Marker(mapView).apply {
@@ -430,39 +408,7 @@ class TripDetailActivity : AppCompatActivity() {
             mapView.controller.setCenter(points.first())
         }
 
-        mapView.invalidate()
         Log.d(TAG, "bindMap done in ${System.currentTimeMillis() - mapStart}ms")
-    }
-
-    private fun computeSegmentRoughness(
-        gpsData: List<TripData>,
-        worldAccel: List<WorldAccelSample>
-    ): List<Double> {
-        val roughness = MutableList(gpsData.size - 1) { 0.0 }
-        if (worldAccel.isEmpty() || gpsData.size < 2) return roughness
-
-        val sums = DoubleArray(gpsData.size - 1)
-        val counts = IntArray(gpsData.size - 1)
-        var segmentIndex = 0
-
-        for (sample in worldAccel) {
-            // Advance to the segment that contains this sample's timestamp.
-            while (segmentIndex < gpsData.size - 2 && sample.timestamp > gpsData[segmentIndex + 1].timestamp) {
-                segmentIndex++
-            }
-            val start = gpsData[segmentIndex].timestamp
-            val end = gpsData[segmentIndex + 1].timestamp
-            if (sample.timestamp in start..end) {
-                val v = sample.vertical.toDouble()
-                sums[segmentIndex] += v * v
-                counts[segmentIndex]++
-            }
-        }
-
-        for (i in roughness.indices) {
-            roughness[i] = if (counts[i] > 0) sqrt(sums[i] / counts[i]) else 0.0
-        }
-        return roughness
     }
 
     private fun getMarkerDrawable(colorRes: Int): Drawable? {
@@ -525,7 +471,6 @@ class TripDetailActivity : AppCompatActivity() {
         }
 
         speedChart.data = LineData(dataSet)
-        speedChart.invalidate()
     }
 
     private fun bindRoughnessChart(worldAccel: List<WorldAccelSample>) {
@@ -554,7 +499,6 @@ class TripDetailActivity : AppCompatActivity() {
         }
 
         roughnessChart.data = LineData(dataSet)
-        roughnessChart.invalidate()
     }
 
     private fun bindLateralChart(worldAccel: List<WorldAccelSample>) {
@@ -575,7 +519,6 @@ class TripDetailActivity : AppCompatActivity() {
             setDrawValues(false)
         }
         lateralChart.data = LineData(dataSet)
-        lateralChart.invalidate()
     }
 
     private fun bindLongitudinalChart(worldAccel: List<WorldAccelSample>) {
@@ -596,7 +539,6 @@ class TripDetailActivity : AppCompatActivity() {
             setDrawValues(false)
         }
         longitudinalChart.data = LineData(dataSet)
-        longitudinalChart.invalidate()
     }
 
     private fun bindYawChart(worldGyro: List<WorldGyroSample>) {
@@ -617,7 +559,15 @@ class TripDetailActivity : AppCompatActivity() {
             setDrawValues(false)
         }
         yawChart.data = LineData(dataSet)
-        yawChart.invalidate()
+    }
+
+    private fun invalidateChartsAndMap() {
+        speedChart.post { speedChart.invalidate() }
+        roughnessChart.post { roughnessChart.invalidate() }
+        lateralChart.post { lateralChart.invalidate() }
+        longitudinalChart.post { longitudinalChart.invalidate() }
+        yawChart.post { yawChart.invalidate() }
+        mapView.post { mapView.invalidate() }
     }
 
     private fun bindRoughnessSummary(worldAccel: List<WorldAccelSample>) {
@@ -640,22 +590,6 @@ class TripDetailActivity : AppCompatActivity() {
             "Vertical: avg %.2f / max %.2f m/s² · Lateral avg: %.2f · Longitudinal avg: %.2f m/s²",
             avgVertical, maxVertical, avgLateral, avgLongitudinal
         )
-    }
-
-    private fun roughnessOfWorldVertical(samples: List<WorldAccelSample>): Double {
-        if (samples.isEmpty()) return 0.0
-        val meanSq = samples.map { it.vertical.toDouble().pow(2) }.average()
-        return sqrt(meanSq)
-    }
-
-    private fun roughnessColor(roughness: Double, min: Double, max: Double): Int {
-        if (max <= min) {
-            return ContextCompat.getColor(this, R.color.green)
-        }
-        val fraction = ((roughness - min) / (max - min)).toFloat().coerceIn(0f, 1f)
-        val green = ContextCompat.getColor(this, R.color.green)
-        val red = ContextCompat.getColor(this, R.color.red)
-        return ArgbEvaluator().evaluate(fraction, green, red) as Int
     }
 
     private fun bindPhotos(photos: List<TripPhoto>) {
