@@ -136,6 +136,7 @@ class TripDetailActivity : AppCompatActivity() {
         setupChart(yawChart, "Yaw rate (rad/s)")
 
         deleteButton.setOnClickListener { confirmDelete() }
+        showLoading(true)
 
         if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
             Log.e(TAG, "Invalid trip extras: tripId=$tripId, start=$tripStart, end=$tripEnd")
