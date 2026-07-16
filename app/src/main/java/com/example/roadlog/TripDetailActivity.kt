@@ -1,9 +1,11 @@
 package com.example.roadlog
 
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -43,6 +45,7 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var yawChart: LineChart
     private lateinit var deleteButton: Button
     private lateinit var viewRouteButton: Button
+    private lateinit var photosContainer: LinearLayout
     private lateinit var contentScrollView: ScrollView
     private lateinit var loadingProgressBar: ProgressBar
 
@@ -85,6 +88,7 @@ class TripDetailActivity : AppCompatActivity() {
         yawChart = findViewById(R.id.yawChart)
         deleteButton = findViewById(R.id.deleteTripButton)
         viewRouteButton = findViewById(R.id.viewRouteButton)
+        photosContainer = findViewById(R.id.photosContainer)
         contentScrollView = findViewById(R.id.contentScrollView)
         loadingProgressBar = findViewById(R.id.loadingProgressBar)
 
@@ -181,7 +185,10 @@ class TripDetailActivity : AppCompatActivity() {
                 val rotationData = withContext(Dispatchers.IO) {
                     database.tripDao().getRotationForTripCapped(tripId, tripStart, tripEnd, 500)
                 }
-                Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}")
+                val photos = withContext(Dispatchers.IO) {
+                    database.tripDao().getPhotosForTrip(tripId)
+                }
+                Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
                 val downsampleStart = System.currentTimeMillis()
                 val displayGps = downsampleToCount(gpsData, 200)
@@ -211,6 +218,7 @@ class TripDetailActivity : AppCompatActivity() {
                 bindLateralChart(worldAccel)
                 bindLongitudinalChart(worldAccel)
                 bindYawChart(worldGyro)
+                bindPhotos(photos)
                 Log.d(TAG, "UI binding took ${System.currentTimeMillis() - bindStart}ms")
 
                 Log.d(TAG, "Trip details ready, hiding loader")
@@ -464,6 +472,52 @@ class TripDetailActivity : AppCompatActivity() {
         }
         yawChart.data = LineData(dataSet)
         yawChart.invalidate()
+    }
+
+    private fun bindPhotos(photos: List<TripPhoto>) {
+        Log.d(TAG, "bindPhotos: photos=${photos.size}")
+        photosContainer.removeAllViews()
+        if (photos.isEmpty()) {
+            photosContainer.visibility = View.GONE
+            return
+        }
+        photosContainer.visibility = View.VISIBLE
+        val size = resources.getDimensionPixelSize(R.dimen.photo_thumbnail_size)
+        val margin = resources.getDimensionPixelSize(R.dimen.photo_thumbnail_margin)
+        for (photo in photos) {
+            val file = java.io.File(photo.filePath)
+            if (!file.exists()) continue
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+
+            val photoCard = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(margin, 0, margin, 0)
+                }
+            }
+
+            val imageView = ImageView(this).apply {
+                setImageBitmap(bitmap)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                layoutParams = LinearLayout.LayoutParams(size, size)
+            }
+
+            val timeText = TextView(this).apply {
+                text = timeFormatter.format(java.util.Date(photo.timestamp))
+                textSize = 12f
+                setTextColor(ContextCompat.getColor(this@TripDetailActivity, R.color.black))
+            }
+
+            photoCard.addView(imageView)
+            photoCard.addView(timeText)
+            photosContainer.addView(photoCard)
+        }
+        if (photosContainer.childCount == 0) {
+            photosContainer.visibility = View.GONE
+        }
     }
 
     private fun confirmDelete() {
