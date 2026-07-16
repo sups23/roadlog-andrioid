@@ -10,8 +10,11 @@ import android.util.Log
  * explicitly listed in the grammar. That means the text passed here is usually
  * already one of the expected phrases, but the fuzzy matcher still provides a
  * robust fallback for partial results and any remaining audio-noise distortion.
+ *
+ * All keywords come from [CauseConfig]; edit `assets/cause_config.json` to
+ * customize the mapping.
  */
-class FuzzyCauseMatcher {
+class FuzzyCauseMatcher(private val config: CauseConfig) {
 
     data class MatchResult(
         val causeCode: String,
@@ -19,62 +22,7 @@ class FuzzyCauseMatcher {
         val score: Double
     )
 
-    /**
-     * Expanded keyword list. Each cause has multiple keywords including
-     * common misheard variants to improve recognition under road noise.
-     *
-     * Multi-word grammar phrases (e.g. "traffic signal") are also listed as
-     * whole-phrase keywords so they map directly to their cause code.
-     */
-    private val keywordMap: Map<String, List<String>> = mapOf(
-        "SIGNAL" to listOf(
-            "signal", "signals", "light", "lights", "traffic signal", "red light",
-            "seegal", "sihgnal", "sigmal", "sig nal", "cignal", "cignel"
-        ),
-        "QUEUE" to listOf(
-            "queue", "queues", "line", "lines", "traffic jam", "congestion",
-            "q", "cue", "kyu", "kue", "kew", "kyew", "qu", "cu"
-        ),
-        "BUS" to listOf(
-            "bus", "buses", "microbus", "minibus",
-            "buss", "bss", "buz", "buzes"
-        ),
-        "PEDESTRIAN" to listOf(
-            "pedestrian", "pedestrians", "ped", "walk", "walking",
-            "pedestrien", "padestrian", "pdestrian", "pedy"
-        ),
-        "ROUGHNESS" to listOf(
-            "roughness", "rough", "rough road", "bump", "bumps",
-            "roufness", "rowghness", "ruffness", "rufness",
-            "rougnes", "roufnes", "bamp", "bum"
-        ),
-        "POTHOLE" to listOf(
-            "pothole", "potholes", "pot hole", "pot holes",
-            "hole", "holes", "pothol", "pothawl"
-        ),
-        "SPEED_BREAKER" to listOf(
-            "speed breaker", "speed breakers", "speedbump", "speed bump", "speed bumps",
-            "breaker", "breakers", "speedbrake", "speed brake"
-        ),
-        "CONSTRUCTION" to listOf(
-            "construction", "road work", "roadwork",
-            "roadblock", "road block", "construct", "construc"
-        ),
-        "FRICTION" to listOf(
-            "friction", "frictions", "parking", "parked", "parked car", "side friction",
-            "friktion", "frickshun", "parkin", "parkd", "frikshin"
-        ),
-        "TURNING" to listOf(
-            "turn", "turns", "turning", "turning vehicle", "u-turn", "u turn",
-            "tern", "terning", "torn", "tarning", "uturn"
-        ),
-        "MARKET" to listOf(
-            "market", "markets", "stall", "stalls", "vendor", "vendors", "street vendor",
-            "markit", "markat", "stawl", "vendr", "vendur"
-        )
-    )
-
-    private val allKeywords: List<Pair<String, String>> = keywordMap.flatMap { (cause, words) ->
+    private val allKeywords: List<Pair<String, String>> = config.keywordMap.flatMap { (cause, words) ->
         words.map { word -> cause to word }
     }
 
@@ -82,10 +30,10 @@ class FuzzyCauseMatcher {
      * Find the best matching cause for the given spoken text.
      *
      * @param spoken The raw recognized text from Vosk.
-     * @param threshold Minimum similarity score (0.0–1.0) to accept a match.
-     * @return The best [MatchResult] or null if no match exceeds the threshold.
+     * @return The best [MatchResult] or null if no match exceeds the configured
+     *         fuzzy threshold.
      */
-    fun findBestMatch(spoken: String, threshold: Double = 0.7): MatchResult? {
+    fun findBestMatch(spoken: String): MatchResult? {
         val cleaned = spoken.lowercase()
             .replace(Regex("[^a-z0-9\\- ]"), " ")
             .trim()
@@ -112,7 +60,7 @@ class FuzzyCauseMatcher {
         // Second pass: also check individual words so single-word commands and
         // short phrases still match their best keyword.
         val inputWords = cleaned.split(Regex("\\s+"))
-            .filter { it.isNotBlank() && it.length >= MIN_INPUT_WORD_LENGTH }
+            .filter { it.isNotBlank() && it.length >= config.minWordLength }
         if (inputWords.isNotEmpty()) {
             for (inputWord in inputWords) {
                 for ((causeCode, keyword) in allKeywords) {
@@ -128,7 +76,7 @@ class FuzzyCauseMatcher {
 
         Log.d(TAG, "Fuzzy match for '$spoken' → best='$bestWord' cause=$bestCause score=%.2f".format(bestScore))
 
-        return if (bestScore >= threshold) {
+        return if (bestScore >= config.fuzzyThreshold) {
             MatchResult(bestCause, bestWord, bestScore)
         } else {
             null
@@ -178,6 +126,5 @@ class FuzzyCauseMatcher {
 
     companion object {
         private const val TAG = "RoadLog"
-        private const val MIN_INPUT_WORD_LENGTH = 3
     }
 }

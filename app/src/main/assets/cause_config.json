@@ -1,0 +1,212 @@
+{
+  "confidenceThreshold": 0.6,
+  "fuzzyThreshold": 0.85,
+  "minWordLength": 3,
+  "causes": [
+    {
+      "code": "SIGNAL",
+      "displayName": "SIGNAL",
+      "shortForm": "SIGNAL",
+      "phrases": [
+        "signal",
+        "traffic signal",
+        "light",
+        "red light"
+      ],
+      "variants": [
+        "seegal",
+        "sihgnal",
+        "sigmal",
+        "sig nal",
+        "cignal",
+        "cignel"
+      ]
+    },
+    {
+      "code": "QUEUE",
+      "displayName": "QUEUE",
+      "shortForm": "QUEUE",
+      "phrases": [
+        "queue",
+        "line",
+        "traffic jam",
+        "congestion"
+      ],
+      "variants": [
+        "cue",
+        "kyu",
+        "kue",
+        "kew",
+        "kyew",
+        "qu",
+        "cu"
+      ]
+    },
+    {
+      "code": "BUS",
+      "displayName": "BUS",
+      "shortForm": "BUS",
+      "phrases": [
+        "bus",
+        "microbus",
+        "minibus"
+      ],
+      "variants": [
+        "buss",
+        "bss",
+        "buz",
+        "buzes"
+      ]
+    },
+    {
+      "code": "PEDESTRIAN",
+      "displayName": "PEDESTRIAN",
+      "shortForm": "PED",
+      "phrases": [
+        "pedestrian",
+        "walking"
+      ],
+      "variants": [
+        "ped",
+        "pedestrien",
+        "padestrian",
+        "pdestrian",
+        "pedy"
+      ]
+    },
+    {
+      "code": "ROUGHNESS",
+      "displayName": "ROUGHNESS",
+      "shortForm": "ROUGH",
+      "phrases": [
+        "roughness",
+        "rough road",
+        "bump"
+      ],
+      "variants": [
+        "rough",
+        "bumps",
+        "roufness",
+        "rowghness",
+        "ruffness",
+        "rufness",
+        "rougnes",
+        "roufnes",
+        "bamp",
+        "bum"
+      ]
+    },
+    {
+      "code": "POTHOLE",
+      "displayName": "POTHOLE",
+      "shortForm": "POTHL",
+      "phrases": [
+        "pothole",
+        "pot hole"
+      ],
+      "variants": [
+        "potholes",
+        "pot holes",
+        "hole",
+        "holes",
+        "pothol",
+        "pothawl"
+      ]
+    },
+    {
+      "code": "SPEED_BREAKER",
+      "displayName": "SPEED BREAKER",
+      "shortForm": "SPD BRK",
+      "phrases": [
+        "speed breaker",
+        "speed bump"
+      ],
+      "variants": [
+        "speed breakers",
+        "speedbump",
+        "speed bumps",
+        "breaker",
+        "breakers",
+        "speedbrake",
+        "speed brake"
+      ]
+    },
+    {
+      "code": "CONSTRUCTION",
+      "displayName": "CONSTRUCTION",
+      "shortForm": "CONSTR",
+      "phrases": [
+        "construction",
+        "road work"
+      ],
+      "variants": [
+        "roadwork",
+        "roadblock",
+        "road block",
+        "construct",
+        "construc"
+      ]
+    },
+    {
+      "code": "FRICTION",
+      "displayName": "FRICTION",
+      "shortForm": "FRICT",
+      "phrases": [
+        "friction",
+        "parking",
+        "parked car",
+        "side friction"
+      ],
+      "variants": [
+        "frictions",
+        "parked",
+        "friktion",
+        "frickshun",
+        "parkin",
+        "parkd",
+        "frikshin"
+      ]
+    },
+    {
+      "code": "TURNING",
+      "displayName": "TURNING",
+      "shortForm": "TURN",
+      "phrases": [
+        "turning",
+        "turning vehicle",
+        "u turn"
+      ],
+      "variants": [
+        "turn",
+        "turns",
+        "u-turn",
+        "tern",
+        "terning",
+        "torn",
+        "tarning",
+        "uturn"
+      ]
+    },
+    {
+      "code": "MARKET",
+      "displayName": "MARKET",
+      "shortForm": "MARKET",
+      "phrases": [
+        "market",
+        "street vendor",
+        "stall",
+        "vendors"
+      ],
+      "variants": [
+        "markets",
+        "stalls",
+        "vendor",
+        "markit",
+        "markat",
+        "stawl",
+        "vendr",
+        "vendur"
+      ]
+    }
+  ]
+}

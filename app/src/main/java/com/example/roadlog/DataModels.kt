@@ -38,16 +38,3 @@ data class DelayEvent(
     val causeCode: String
 )
 
-enum class CauseCode(val displayName: String) {
-    SIGNAL("Signal"),
-    QUEUE("Queue"),
-    BUS("Bus"),
-    PEDESTRIAN("Pedestrian"),
-    ROUGHNESS("Roughness"),
-    POTHOLE("Pothole"),
-    SPEED_BREAKER("Speed Breaker"),
-    CONSTRUCTION("Construction"),
-    FRICTION("Friction"),
-    TURNING("Turning"),
-    MARKET("Market")
-}

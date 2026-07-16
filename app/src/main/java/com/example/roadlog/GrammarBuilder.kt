@@ -12,75 +12,10 @@ import org.json.JSONArray
  * noise, wind, or microphone vibration. It can only output one of the listed
  * phrases (or a phonetically close variant that is still within the grammar).
  *
- * The phrase list below is intentionally easy to extend: add a new string to
- * the [phrases] list and, if it should map to a cause, add a matching keyword
- * in [FuzzyCauseMatcher].
+ * The phrases come from [CauseConfig.allGrammarPhrases], which is loaded from
+ * `assets/cause_config.json`. Edit that file to add, remove, or change phrases.
  */
 object GrammarBuilder {
-
-    /**
-     * All phrases the recognizer is allowed to produce.
-     *
-     * Each entry must be lowercase and contain only letters, numbers, spaces,
-     * and hyphens. Multi-word phrases are allowed; Vosk treats each string as
-     * one allowed utterance alternative.
-     */
-    val phrases = listOf(
-        // SIGNAL
-        "signal",
-        "traffic signal",
-        "light",
-        "red light",
-
-        // QUEUE
-        "queue",
-        "line",
-        "traffic jam",
-        "congestion",
-
-        // BUS
-        "bus",
-        "microbus",
-        "minibus",
-
-        // PEDESTRIAN
-        "pedestrian",
-        "walking",
-
-        // ROUGHNESS (general rough road)
-        "roughness",
-        "rough road",
-        "bump",
-
-        // POTHOLE
-        "pothole",
-        "pot hole",
-
-        // SPEED_BREAKER
-        "speed breaker",
-        "speed bump",
-
-        // CONSTRUCTION
-        "construction",
-        "road work",
-
-        // FRICTION
-        "friction",
-        "parking",
-        "parked car",
-        "side friction",
-
-        // TURNING
-        "turning",
-        "turning vehicle",
-        "u turn",
-
-        // MARKET
-        "market",
-        "street vendor",
-        "stall",
-        "vendors"
-    )
 
     /**
      * Returns the grammar as a JSON array string suitable for Vosk's
@@ -88,7 +23,7 @@ object GrammarBuilder {
      *
      * Example output: ["signal","traffic signal","bus",...]
      */
-    fun buildGrammarJson(): String {
-        return JSONArray(phrases).toString()
+    fun buildGrammarJson(config: CauseConfig): String {
+        return JSONArray(config.allGrammarPhrases).toString()
     }
 }

@@ -13,11 +13,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.GridLayout
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -217,28 +219,50 @@ class MainActivity : AppCompatActivity() {
 
         takePhotoButton.setOnClickListener { captureManualPhoto() }
 
-        causeLabels = mapOf(
-            "SIGNAL" to findViewById(R.id.labelSignal),
-            "QUEUE" to findViewById(R.id.labelQueue),
-            "BUS" to findViewById(R.id.labelBus),
-            "PEDESTRIAN" to findViewById(R.id.labelPedestrian),
-            "ROUGHNESS" to findViewById(R.id.labelRoughness),
-            "POTHOLE" to findViewById(R.id.labelPothole),
-            "SPEED_BREAKER" to findViewById(R.id.labelSpeedBreaker),
-            "CONSTRUCTION" to findViewById(R.id.labelConstruction),
-            "FRICTION" to findViewById(R.id.labelFriction),
-            "TURNING" to findViewById(R.id.labelTurning),
-            "MARKET" to findViewById(R.id.labelMarket)
-        )
-
-        causeLabels.forEach { (cause, label) ->
-            label.setOnClickListener {
-                sendCauseToService(cause)
-                highlightCause(cause)
-                lastMatchedCause = cause
-                updateCauseHeardLine()
-            }
+        // Dynamically build cause labels from cause_config.json so the UI stays in
+        // sync with the configurable grammar and mapping.
+        val causeConfig = try {
+            CauseConfigLoader.load(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load cause config for UI", e)
+            CauseConfig(
+                confidenceThreshold = 0.6f,
+                fuzzyThreshold = 0.85,
+                minWordLength = 3,
+                causes = emptyList()
+            )
         }
+
+        val gridLayout = findViewById<GridLayout>(R.id.causeLabelsGrid)
+        val labels = mutableMapOf<String, TextView>()
+        val displayMetrics = resources.displayMetrics
+        val screenWidthDp = displayMetrics.widthPixels / displayMetrics.density
+        val columnCount = 3
+        val columnWidthDp = (screenWidthDp / columnCount).toInt()
+
+        causeConfig.causes.forEach { cause ->
+            val label = TextView(this).apply {
+                id = View.generateViewId()
+                text = cause.shortForm
+                setTextAppearance(R.style.CauseLabel)
+                gravity = Gravity.CENTER
+                layoutParams = GridLayout.LayoutParams().apply {
+                    width = (columnWidthDp * displayMetrics.density).toInt()
+                    height = GridLayout.LayoutParams.WRAP_CONTENT
+                    setMargins(4, 8, 4, 0)
+                    columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                }
+                setOnClickListener {
+                    sendCauseToService(cause.code)
+                    highlightCause(cause.code)
+                    lastMatchedCause = cause.code
+                    updateCauseHeardLine()
+                }
+            }
+            gridLayout.addView(label)
+            labels[cause.code] = label
+        }
+        causeLabels = labels
 
         startButton.setOnClickListener { onStartClicked() }
         stopButton.setOnClickListener { onStopClicked() }

@@ -60,6 +60,7 @@ class LoggerService : Service() {
     private var gyroscope: Sensor? = null
     private var rotationSensor: Sensor? = null
     private lateinit var database: AppDatabase
+    private lateinit var causeConfig: CauseConfig
     private lateinit var fuzzyMatcher: FuzzyCauseMatcher
 
     private var voskRecognizer: VoskSpeechRecognizer? = null
@@ -210,14 +211,25 @@ class LoggerService : Service() {
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
         database = AppDatabase.getDatabase(this)
-        fuzzyMatcher = FuzzyCauseMatcher()
+        causeConfig = try {
+            CauseConfigLoader.load(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load cause config, using defaults", e)
+            CauseConfig(
+                confidenceThreshold = 0.6f,
+                fuzzyThreshold = 0.85,
+                minWordLength = 3,
+                causes = emptyList()
+            )
+        }
+        fuzzyMatcher = FuzzyCauseMatcher(causeConfig)
 
         prepareVoskModel()
     }
 
     private fun prepareVoskModel() {
         Log.i(TAG, "Preparing Vosk offline model...")
-        voskRecognizer = VoskSpeechRecognizer(this, GrammarBuilder.buildGrammarJson())
+        voskRecognizer = VoskSpeechRecognizer(this, GrammarBuilder.buildGrammarJson(causeConfig))
         voskRecognizer?.prepare(
             onReady = {
                 Log.i(TAG, "Vosk model ready")
@@ -396,8 +408,8 @@ class LoggerService : Service() {
                 broadcastStatus()
             }
 
-            override fun onResult(text: String) {
-                Log.i(TAG, "Vosk result callback: '$text'")
+            override fun onResult(text: String, confidence: Float) {
+                Log.i(TAG, "Vosk result callback: '$text' confidence=$confidence")
                 broadcastHeardText(text, isPartial = false)
 
                 if (text.isEmpty()) {
@@ -405,6 +417,23 @@ class LoggerService : Service() {
                     return
                 }
 
+                // Reject low-confidence recognitions. With a grammar-constrained
+                // recognizer, random speech is often forced into the closest grammar
+                // phrase, but the confidence score remains low.
+                if (confidence < causeConfig.confidenceThreshold) {
+                    Log.d(TAG, "Recognition confidence $confidence below threshold ${causeConfig.confidenceThreshold}, ignoring: '$text'")
+                    return
+                }
+
+                // Try exact grammar phrase mapping first (fast and deterministic).
+                val exactCause = causeConfig.phraseToCauseMap[text.lowercase()]
+                if (exactCause != null) {
+                    Log.i(TAG, "Exact phrase mapped to cause: $exactCause")
+                    recordCauseEvent(exactCause)
+                    return
+                }
+
+                // Fall back to fuzzy matching for partial/noise distortions.
                 val match = fuzzyMatcher.findBestMatch(text)
                 if (match != null) {
                     Log.i(TAG, "Fuzzy matched cause: ${match.causeCode} (via '${match.matchedWord}', score=${match.score})")

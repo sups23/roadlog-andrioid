@@ -19,6 +19,11 @@ import org.vosk.android.StorageService
  * Mirrors Vosk's SpeechService recognizer thread: a single Recognizer is fed
  * continuous audio, and we rely on Vosk's internal utterance segmentation
  * (no explicit reset between utterances).
+ *
+ * When a grammar is supplied, the recognizer is constrained to only the listed
+ * phrases, which dramatically improves accuracy for a fixed command vocabulary.
+ * Word-level confidence is enabled so the caller can reject low-confidence
+ * recognitions caused by random speech or noise.
  */
 class VoskSpeechRecognizer(
     private val context: Context,
@@ -27,7 +32,7 @@ class VoskSpeechRecognizer(
 
     interface Callback {
         fun onReady()
-        fun onResult(text: String)
+        fun onResult(text: String, confidence: Float)
         fun onPartialResult(text: String)
         fun onError(error: String)
     }
@@ -77,6 +82,11 @@ class VoskSpeechRecognizer(
                         Log.i(TAG, "Creating free-form Vosk recognizer")
                         Recognizer(unpackedModel, sampleRate.toFloat())
                     }
+
+                    // Enable word-level timestamps/confidence so we can compute a
+                    // phrase confidence score for rejection of random speech.
+                    recognizer?.setWords(true)
+
                     isReady = true
                     Log.i(TAG, "Vosk model and recognizer ready")
                     onReady()
@@ -230,8 +240,9 @@ class VoskSpeechRecognizer(
                     if (isEndpoint) {
                         val resultJson = currentRecognizer.result
                         val text = extractText(resultJson)
-                        Log.i(TAG, "Vosk FINAL result: raw=$resultJson | text='$text' | iter=$iterations")
-                        callback?.onResult(text)
+                        val confidence = extractConfidence(resultJson)
+                        Log.i(TAG, "Vosk FINAL result: raw=$resultJson | text='$text' | confidence=$confidence | iter=$iterations")
+                        callback?.onResult(text, confidence)
                         lastPartial = ""
                     } else {
                         val partialJson = currentRecognizer.partialResult
@@ -291,6 +302,36 @@ class VoskSpeechRecognizer(
             JSONObject(hypothesis ?: "{}").optString("text", "").trim()
         } catch (e: Exception) {
             hypothesis?.trim() ?: ""
+        }
+    }
+
+    /**
+     * Extract the minimum word confidence from a Vosk final result.
+     *
+     * With `setWords(true)`, the result JSON contains a "result" array where
+     * each word object has a "conf" field. We use the minimum confidence as a
+     * conservative phrase-confidence estimate.
+     */
+    private fun extractConfidence(hypothesis: String?): Float {
+        return try {
+            val json = JSONObject(hypothesis ?: "{}")
+            val resultArray = json.optJSONArray("result") ?: return 0f
+            var minConfidence = Float.MAX_VALUE
+            var hasWord = false
+            for (i in 0 until resultArray.length()) {
+                val wordObj = resultArray.getJSONObject(i)
+                val conf = wordObj.optDouble("conf", -1.0).toFloat()
+                if (conf >= 0f) {
+                    hasWord = true
+                    if (conf < minConfidence) {
+                        minConfidence = conf
+                    }
+                }
+            }
+            if (hasWord) minConfidence else 0f
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse confidence from result: ${e.message}")
+            0f
         }
     }
 

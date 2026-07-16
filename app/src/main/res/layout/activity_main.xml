@@ -41,91 +41,11 @@
             android:text="Ready to record"
             android:textSize="16sp" />
 
-        <LinearLayout
+        <GridLayout
+            android:id="@+id/causeLabelsGrid"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/labelSignal"
-                    style="@style/CauseLabel"
-                    android:text="SIGNAL" />
-
-                <TextView
-                    android:id="@+id/labelQueue"
-                    style="@style/CauseLabel"
-                    android:text="QUEUE" />
-
-                <TextView
-                    android:id="@+id/labelBus"
-                    style="@style/CauseLabel"
-                    android:text="BUS" />
-
-                <TextView
-                    android:id="@+id/labelPedestrian"
-                    style="@style/CauseLabel"
-                    android:text="PEDESTRIAN" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_marginEnd="4dp"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/labelRoughness"
-                    style="@style/CauseLabel"
-                    android:text="ROUGHNESS" />
-
-                <TextView
-                    android:id="@+id/labelPothole"
-                    style="@style/CauseLabel"
-                    android:text="POTHOLE" />
-
-                <TextView
-                    android:id="@+id/labelSpeedBreaker"
-                    style="@style/CauseLabel"
-                    android:text="SPEED BRK" />
-
-                <TextView
-                    android:id="@+id/labelConstruction"
-                    style="@style/CauseLabel"
-                    android:text="CONSTR" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/labelFriction"
-                    style="@style/CauseLabel"
-                    android:text="FRICTION" />
-
-                <TextView
-                    android:id="@+id/labelTurning"
-                    style="@style/CauseLabel"
-                    android:text="TURNING" />
-
-                <TextView
-                    android:id="@+id/labelMarket"
-                    style="@style/CauseLabel"
-                    android:text="MARKET" />
-            </LinearLayout>
-        </LinearLayout>
+            android:columnCount="3" />
 
         <TextView
             android:id="@+id/lastSpokenText"
