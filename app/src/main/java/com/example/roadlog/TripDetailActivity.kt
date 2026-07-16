@@ -115,6 +115,16 @@ class TripDetailActivity : AppCompatActivity() {
         mapView.setMinZoomLevel(3.0)
         mapView.setMaxZoomLevel(19.0)
 
+        // Prevent ScrollView from stealing map drags.
+        mapView.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> v.parent.requestDisallowInterceptTouchEvent(true)
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> v.parent.requestDisallowInterceptTouchEvent(false)
+            }
+            false
+        }
+
         deleteButton.setOnClickListener { confirmDelete() }
         showLoading(true)
 
@@ -188,7 +198,7 @@ class TripDetailActivity : AppCompatActivity() {
 
                 val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGpsForTripCapped(tripId, tripStart, tripEnd, 200)
+                    database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
                 }
                 val events = withContext(Dispatchers.IO) {
                     database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
