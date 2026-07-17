@@ -48,12 +48,15 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var photosContainer: LinearLayout
     private lateinit var contentScrollView: ScrollView
     private lateinit var loadingProgressBar: ProgressBar
+    private lateinit var loadingStatusText: TextView
 
     private var tripId: Long = -1
     private var tripStart: Long = 0
     private var tripEnd: Long = 0
 
     private var gpsRouteData: List<TripData> = emptyList()
+    private var worldAccelData: List<WorldAccelSample> = emptyList()
+    private var worldGyroData: List<WorldGyroSample> = emptyList()
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val dateFormatter = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
@@ -91,6 +94,7 @@ class TripDetailActivity : AppCompatActivity() {
         photosContainer = findViewById(R.id.photosContainer)
         contentScrollView = findViewById(R.id.contentScrollView)
         loadingProgressBar = findViewById(R.id.loadingProgressBar)
+        loadingStatusText = findViewById(R.id.loadingStatusText)
 
         setupChart(speedChart, "Speed (km/h)")
         setupChart(roughnessChart, "Vertical roughness (m/s²)")
@@ -152,6 +156,7 @@ class TripDetailActivity : AppCompatActivity() {
 
     private fun loadTripDetails() {
         showLoading(true)
+        setStatus("Loading trip data...")
         Log.d(TAG, "Loading trip details: tripId=$tripId, start=$tripStart, end=$tripEnd")
         scope.launch {
             try {
@@ -168,6 +173,7 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 Log.d(TAG, "Trip found: id=${trip.id}, startMs=${trip.startTimeMs}, endMs=${trip.endTimeMs}")
 
+                setStatus("Querying GPS and sensor data...")
                 val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
                     database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
@@ -190,17 +196,21 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
 
+                setStatus("Computing sensor fusion...")
                 val fusionStart = System.currentTimeMillis()
                 Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
                     computeWorldAccel(accelData, rotationData)
                 }
+                worldAccelData = worldAccel
                 Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
                     computeWorldGyro(gyroData, rotationData)
                 }
+                worldGyroData = worldGyro
                 Log.d(TAG, "Sensor fusion took ${System.currentTimeMillis() - fusionStart}ms")
 
+                setStatus("Preparing charts...")
                 val bindStart = System.currentTimeMillis()
                 Log.d(TAG, "Binding UI...")
                 bindHeader(trip, gpsData)
@@ -232,6 +242,7 @@ class TripDetailActivity : AppCompatActivity() {
         } else {
             loadingProgressBar.visibility = View.GONE
             contentScrollView.visibility = View.VISIBLE
+            loadingStatusText.visibility = View.GONE
         }
         val parent = contentScrollView.parent as? View
         parent?.requestLayout()
@@ -249,9 +260,14 @@ class TripDetailActivity : AppCompatActivity() {
         }
     }
 
+    private fun setStatus(message: String) {
+        loadingStatusText.text = message
+        loadingStatusText.visibility = View.VISIBLE
+    }
+
     private fun showRouteMap() {
         if (gpsRouteData.isEmpty()) return
-        RouteMapDialogFragment.show(this, gpsRouteData)
+        RouteMapDialogFragment.show(this, gpsRouteData, worldAccelData, worldGyroData)
     }
 
     private fun bindHeader(trip: Trip, gpsData: List<TripData>) {
