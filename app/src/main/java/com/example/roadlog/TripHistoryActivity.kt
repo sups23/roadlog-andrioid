@@ -4,7 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -46,6 +48,48 @@ class TripHistoryActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
 
         attachSwipeToDelete()
+
+        if (BuildConfig.DEBUG) {
+            setupDebugButtons()
+        }
+    }
+
+    private fun setupDebugButtons() {
+        if (!BuildConfig.DEBUG) return
+        val debugButtons = findViewById<View>(R.id.debugButtons)
+        debugButtons.visibility = View.VISIBLE
+        findViewById<Button>(R.id.seedDemoButton).setOnClickListener { onSeedDemos() }
+        findViewById<Button>(R.id.clearDemoButton).setOnClickListener { onClearDemos() }
+    }
+
+    private fun onSeedDemos() {
+        if (!BuildConfig.DEBUG) return
+        scope.launch {
+            val seeded = withContext(Dispatchers.IO) {
+                DebugSeeder.seedIfNeeded(this@TripHistoryActivity)
+            }
+            if (seeded) {
+                Toast.makeText(this@TripHistoryActivity, "Seeded demo trips", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@TripHistoryActivity, "Demo data already present", Toast.LENGTH_SHORT).show()
+            }
+            loadTrips()
+        }
+    }
+
+    private fun onClearDemos() {
+        if (!BuildConfig.DEBUG) return
+        scope.launch {
+            if (!DebugSeeder.isSeeded(this@TripHistoryActivity)) {
+                Toast.makeText(this@TripHistoryActivity, "No demo data to clear", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            withContext(Dispatchers.IO) {
+                DebugSeeder.clear(this@TripHistoryActivity)
+            }
+            Toast.makeText(this@TripHistoryActivity, "Demo data cleared", Toast.LENGTH_SHORT).show()
+            loadTrips()
+        }
     }
 
     override fun onResume() {
@@ -117,6 +161,34 @@ class TripHistoryActivity : AppCompatActivity() {
                 }
                 database.tripDao().deleteTripCascade(trip.id)
             }
+            loadTrips()
+        }
+    }
+
+    private fun onSeedDemos() {
+        scope.launch {
+            val seeded = withContext(Dispatchers.IO) {
+                DebugSeeder.seedIfNeeded(this@TripHistoryActivity)
+            }
+            if (seeded) {
+                Toast.makeText(this@TripHistoryActivity, "Seeded demo trips", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@TripHistoryActivity, "Demo data already present", Toast.LENGTH_SHORT).show()
+            }
+            loadTrips()
+        }
+    }
+
+    private fun onClearDemos() {
+        scope.launch {
+            if (!DebugSeeder.isSeeded(this@TripHistoryActivity)) {
+                Toast.makeText(this@TripHistoryActivity, "No demo data to clear", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            withContext(Dispatchers.IO) {
+                DebugSeeder.clear(this@TripHistoryActivity)
+            }
+            Toast.makeText(this@TripHistoryActivity, "Demo data cleared", Toast.LENGTH_SHORT).show()
             loadTrips()
         }
     }
