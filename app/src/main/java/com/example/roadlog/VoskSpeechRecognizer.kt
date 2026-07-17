@@ -99,10 +99,11 @@ class VoskSpeechRecognizer(
 
     fun startListening(callback: Callback) {
         recognizerScope.launch {
-            lifecycleMutex.withLock {
+            lifecycleMutex.lock()
+            try {
                 if (!isPrepared || preparedRecognizer == null) {
                     callback.onError("Vosk model not ready")
-                    return@withLock
+                    return@launch
                 }
 
                 stopSessionLocked()
@@ -117,7 +118,7 @@ class VoskSpeechRecognizer(
                 )
                 if (minBufferSize <= 0) {
                     callback.onError("Invalid AudioRecord buffer size: $minBufferSize")
-                    return@withLock
+                    return@launch
                 }
 
                 val desiredBufferSize = (sampleRate * 0.2f).toInt()
@@ -135,13 +136,13 @@ class VoskSpeechRecognizer(
                     if (ar.state != AudioRecord.STATE_INITIALIZED) {
                         ar.release()
                         callback.onError("AudioRecord failed to initialize")
-                        return@withLock
+                        return@launch
                     }
                     ar
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to create AudioRecord", e)
                     callback.onError("Failed to create AudioRecord: ${e.message}")
-                    return@withLock
+                    return@launch
                 }
 
                 sessionRecorder = recorder
@@ -166,16 +167,20 @@ class VoskSpeechRecognizer(
 
     fun stop() {
         recognizerScope.launch {
-            lifecycleMutex.withLock {
+            lifecycleMutex.lock()
+            try {
                 stopSessionLocked()
                 sessionCallback = null
+            } finally {
+                lifecycleMutex.unlock()
             }
         }
     }
 
     fun destroy() {
         recognizerScope.launch {
-            lifecycleMutex.withLock {
+            lifecycleMutex.lock()
+            try {
                 isPrepared = false
                 preparationGeneration++
                 stopSessionLocked()
@@ -185,6 +190,8 @@ class VoskSpeechRecognizer(
                 try { preparedModel?.close() } catch (_: Exception) {}
                 preparedModel = null
                 Log.i(TAG, "Vosk resources destroyed")
+            } finally {
+                lifecycleMutex.unlock()
             }
         }
     }
@@ -220,7 +227,7 @@ class VoskSpeechRecognizer(
         val maxConsecutiveReadErrors = 5
         val maxConsecutiveZeroReads = 100
 
-        while (sessionListening && sessionGeneration == gen && isActive) {
+        while (sessionListening && sessionGeneration == gen && currentCoroutineContext().isActive) {
             try {
                 iterations++
                 val read = try {

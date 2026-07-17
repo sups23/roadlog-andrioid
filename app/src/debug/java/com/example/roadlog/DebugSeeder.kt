@@ -123,7 +123,7 @@ object DebugSeeder {
                 val photoFile = File(photo.filePath)
                 photoFile.parentFile?.mkdirs()
                 if (!photoFile.exists()) {
-                    photoFile.writeBytes(TestFixtures.generateJpegBytes())
+                    photoFile.writeBytes(JpegGenerator.bytes())
                 }
                 withContext(Dispatchers.IO) { db.tripDao().insertPhoto(photo) }
             }
@@ -215,6 +215,7 @@ object DebugSeeder {
             rows.add(
                 TripData(
                     tripId = tripId, timestamp = t,
+                    latitude = null, longitude = null, speedKmh = null,
                     accelX = kotlin.math.sin(i * 0.02).toFloat() * 0.2f,
                     accelY = kotlin.math.cos(i * 0.02).toFloat() * 0.15f,
                     accelZ = 9.8f + kotlin.math.sin(i * 0.03).toFloat() * 0.8f,
@@ -229,6 +230,7 @@ object DebugSeeder {
             rows.add(
                 TripData(
                     tripId = tripId, timestamp = t,
+                    latitude = null, longitude = null, speedKmh = null,
                     eventCause = cause
                 )
             )
