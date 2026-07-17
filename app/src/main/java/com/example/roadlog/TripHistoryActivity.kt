@@ -115,9 +115,7 @@ class TripHistoryActivity : AppCompatActivity() {
                         Log.e("RoadLog", "Failed to delete photo ${photo.filePath}", e)
                     }
                 }
-                database.tripDao().deletePhotosForTrip(trip.id)
-                database.tripDao().deleteTripDataInRange(trip.startTimeMs, trip.endTimeMs)
-                database.tripDao().deleteTrip(trip.id)
+                database.tripDao().deleteTripCascade(trip.id)
             }
             loadTrips()
         }

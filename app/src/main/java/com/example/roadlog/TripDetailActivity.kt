@@ -551,9 +551,7 @@ class TripDetailActivity : AppCompatActivity() {
                         Log.e("RoadLog", "Failed to delete photo ${photo.filePath}", e)
                     }
                 }
-                database.tripDao().deletePhotosForTrip(tripId)
-                database.tripDao().deleteTripDataInRange(tripStart, tripEnd)
-                database.tripDao().deleteTrip(tripId)
+                database.tripDao().deleteTripCascade(tripId)
             }
             finish()
         }

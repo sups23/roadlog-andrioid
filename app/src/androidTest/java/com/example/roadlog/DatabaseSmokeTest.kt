@@ -251,4 +251,46 @@ class DatabaseSmokeTest {
         assertEquals(0, db.tripDao().getAbandonedTrips().size)
         assertEquals(0, db.tripDao().getAllTrips().size)
     }
+
+    @Test
+    fun `deleting one overlapping trip preserves the other`() = runTest {
+        val trip1 = TestFixtures.tripA()
+        val trip2 = TestFixtures.tripB()
+
+        val id1 = db.tripDao().insertTrip(trip1)
+        val id2 = db.tripDao().insertTrip(trip2)
+
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id1, trip1.startTimeMs, trip1.endTimeMs, 10))
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id2, trip2.startTimeMs, trip2.endTimeMs, 10))
+
+        val photo1 = TripPhoto(tripId = id1, timestamp = trip1.startTimeMs + 1000, filePath = "/tmp/p1.jpg")
+        val photo2 = TripPhoto(tripId = id2, timestamp = trip2.startTimeMs + 1000, filePath = "/tmp/p2.jpg")
+        db.tripDao().insertPhoto(photo1)
+        db.tripDao().insertPhoto(photo2)
+
+        db.tripDao().deleteTripCascade(id1)
+
+        assertEquals(0, db.tripDao().getPhotosForTrip(id1).size)
+        assertEquals(0, db.tripDao().getGpsForTrip(id1, trip1.startTimeMs, trip1.endTimeMs).size)
+        assertNull(db.tripDao().getTripById(id1))
+
+        assertNotNull(db.tripDao().getTripById(id2))
+        assertEquals(1, db.tripDao().getPhotosForTrip(id2).size)
+        assertEquals(10, db.tripDao().getGpsForTrip(id2, trip2.startTimeMs, trip2.endTimeMs).size)
+        assertEquals(1, db.tripDao().getAllTrips().size)
+    }
+
+    @Test
+    fun `deleteTripDataForTrip removes only that trips data`() = runTest {
+        val id1 = db.tripDao().insertTrip(TestFixtures.tripA())
+        val id2 = db.tripDao().insertTrip(TestFixtures.tripB())
+
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id1, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS, 5))
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS / 2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS + TestFixtures.HOUR_MS / 2, 5))
+
+        db.tripDao().deleteTripDataForTrip(id1)
+
+        assertEquals(0, db.tripDao().getGpsForTrip(id1, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS).size)
+        assertEquals(5, db.tripDao().getGpsForTrip(id2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS / 2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS + TestFixtures.HOUR_MS / 2).size)
+    }
 }

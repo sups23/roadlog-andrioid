@@ -126,6 +126,13 @@ interface TripDao {
     suspend fun deleteTrip(tripId: Long)
 
     @Transaction
+    suspend fun deleteTripCascade(tripId: Long) {
+        deletePhotosForTrip(tripId)
+        deleteTripDataForTrip(tripId)
+        deleteTrip(tripId)
+    }
+
+    @Transaction
     suspend fun finalizeTrip(
         tripId: Long,
         endTimeMs: Long,
@@ -173,9 +180,6 @@ interface TripDao {
 
     @Query("DELETE FROM trip_data WHERE tripId = :tripId")
     suspend fun deleteTripDataForTrip(tripId: Long)
-
-    @Query("DELETE FROM trip_data WHERE timestamp BETWEEN :fromMs AND :toMs")
-    suspend fun deleteTripDataInRange(fromMs: Long, toMs: Long)
 
     @Insert
     suspend fun insertPhoto(photo: TripPhoto): Long
