@@ -3,6 +3,7 @@ package com.example.roadlog
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -45,10 +46,6 @@ class TripHistoryActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
 
         attachSwipeToDelete()
-
-        if (BuildConfig.DEBUG) {
-            com.example.roadlog.DebugSeedBridge.setup(this, scope) { loadTrips() }
-        }
     }
 
     override fun onResume() {
@@ -66,7 +63,7 @@ class TripHistoryActivity : AppCompatActivity() {
         return true
     }
 
-    private fun loadTrips() {
+    internal fun loadTrips() {
         scope.launch {
             val trips = withContext(Dispatchers.IO) {
                 database.tripDao().getAllTrips()
