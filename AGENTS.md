@@ -5,8 +5,8 @@
 - Single-module Android app: `:app`; all production Kotlin is under `app/src/main/java/com/example/roadlog/`.
 - `MainActivity` owns the UI, map, permissions, and CameraX capture; `LoggerService` owns foreground recording, GPS/sensors, Vosk, and Room persistence.
 - UI/service communication uses broadcasts and action/extra constants defined in `LoggerService`; receivers are registered as `RECEIVER_NOT_EXPORTED`.
-- Recording data is buffered in memory and flushed asynchronously when stopping. `LoggerService` inserts the `Trip` summary first, then tags `TripData` rows with its generated ID.
-- `AppDatabase.kt` is Room schema version 5 with explicit migrations `1 -> 2 -> 3 -> 4 -> 5`; schema changes require a migration and version update.
+- Recording data is buffered in memory and flushed to Room in periodic batches (every 5 seconds). `LoggerService` creates a draft `Trip` at start, writes rows incrementally, then finalizes the trip in a Room transaction on stop. Only completed trips appear in history.
+- `AppDatabase.kt` is Room schema version 6 with explicit migrations `1 -> 2 -> 3 -> 4 -> 5 -> 6`; schema changes require a migration and version update.
 - `TripHistoryActivity` and `TripDetailActivity` read Room data for trip summaries, route/timeline views, charts, and photos. Map tiles are cached under the app-private files directory.
 
 ## Commands

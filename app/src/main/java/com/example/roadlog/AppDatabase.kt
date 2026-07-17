@@ -31,6 +31,12 @@ data class TripData(
     val rawTimestamp: Long? = null
 )
 
+object TripStatus {
+    const val COMPLETED = 0
+    const val RECORDING = 1
+    const val ABANDONED = 2
+}
+
 @Entity(tableName = "trips")
 data class Trip(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -43,7 +49,8 @@ data class Trip(
     val gpsPointCount: Int,
     val accelPointCount: Int,
     val causeBreakdown: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val status: Int = TripStatus.COMPLETED
 )
 
 @Entity(
@@ -73,7 +80,7 @@ interface TripDao {
     @Query("DELETE FROM trip_data")
     suspend fun deleteAll()
 
-    @Query("SELECT * FROM trips ORDER BY startTimeMs DESC")
+    @Query("SELECT * FROM trips WHERE status = ${TripStatus.COMPLETED} ORDER BY startTimeMs DESC")
     suspend fun getAllTrips(): List<Trip>
 
     @Query("SELECT * FROM trips WHERE id = :tripId LIMIT 1")
@@ -117,6 +124,55 @@ interface TripDao {
 
     @Query("DELETE FROM trips WHERE id = :tripId")
     suspend fun deleteTrip(tripId: Long)
+
+    @Transaction
+    suspend fun finalizeTrip(
+        tripId: Long,
+        endTimeMs: Long,
+        endNanoTime: Long,
+        distanceMeters: Double,
+        eventCount: Int,
+        gpsPointCount: Int,
+        accelPointCount: Int,
+        causeBreakdown: String,
+        createdAt: Long
+    ) {
+        updateTripSummary(tripId, endTimeMs, endNanoTime, distanceMeters, eventCount, gpsPointCount, accelPointCount, causeBreakdown, createdAt)
+        markTripCompleted(tripId)
+    }
+
+    @Query("""
+        UPDATE trips SET
+            endTimeMs = :endTimeMs,
+            endNanoTime = :endNanoTime,
+            distanceMeters = :distanceMeters,
+            eventCount = :eventCount,
+            gpsPointCount = :gpsPointCount,
+            accelPointCount = :accelPointCount,
+            causeBreakdown = :causeBreakdown,
+            createdAt = :createdAt
+        WHERE id = :tripId
+    """)
+    suspend fun updateTripSummary(
+        tripId: Long,
+        endTimeMs: Long,
+        endNanoTime: Long,
+        distanceMeters: Double,
+        eventCount: Int,
+        gpsPointCount: Int,
+        accelPointCount: Int,
+        causeBreakdown: String,
+        createdAt: Long
+    )
+
+    @Query("UPDATE trips SET status = ${TripStatus.COMPLETED} WHERE id = :tripId")
+    suspend fun markTripCompleted(tripId: Long)
+
+    @Query("SELECT * FROM trips WHERE status = ${TripStatus.RECORDING}")
+    suspend fun getAbandonedTrips(): List<Trip>
+
+    @Query("DELETE FROM trip_data WHERE tripId = :tripId")
+    suspend fun deleteTripDataForTrip(tripId: Long)
 
     @Query("DELETE FROM trip_data WHERE timestamp BETWEEN :fromMs AND :toMs")
     suspend fun deleteTripDataInRange(fromMs: Long, toMs: Long)
@@ -312,7 +368,14 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
-@Database(entities = [TripData::class, Trip::class, TripPhoto::class], version = 5)
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN status INTEGER NOT NULL DEFAULT ${TripStatus.COMPLETED}")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_trip_data_tripId ON trip_data(tripId)")
+    }
+}
+
+@Database(entities = [TripData::class, Trip::class, TripPhoto::class], version = 6)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tripDao(): TripDao
 
@@ -327,7 +390,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "roadlog_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                 INSTANCE = instance
                 instance

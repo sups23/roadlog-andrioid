@@ -70,34 +70,52 @@ class LoggerService : Service() {
     private val gyroBuffer = mutableListOf<GyroPoint>()
     private val rotationBuffer = mutableListOf<RotationPoint>()
     private val eventBuffer = mutableListOf<DelayEvent>()
+    private val bufferLock = Any()
 
     private var startTimeMs: Long = 0
     private var startNanoTime: Long = 0
     private var endNanoTime: Long = 0
     private var eventCount = 0
+    private var gpsPointCount = 0
+    private var accelPointCount = 0
+    private var totalDistanceMeters = 0.0
+    private var lastGpsPoint: GpsPoint? = null
+    private val causeBreakdownMap = mutableMapOf<String, Int>()
     private var gpsLocked = false
     private var isListening = false
     private var modelReady = false
     private val pendingStartAfterModelReady = AtomicBoolean(false)
 
     private var captureEnabled = false
+    private var draftTripId: Long = -1
+    private val draftReady = AtomicBoolean(false)
 
     private val handler = Handler(Looper.getMainLooper())
     private val isRunning = AtomicBoolean(false)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var flushJob: Job? = null
 
     private val gpsCallback = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             gpsLocked = true
             Log.i(TAG, "Location from ${location.provider}: ${location.latitude},${location.longitude} acc=${location.accuracy}")
-            gpsBuffer.add(
-                GpsPoint(
-                    timestampMs = System.currentTimeMillis(),
-                    lat = location.latitude,
-                    lon = location.longitude,
-                    speedKmh = location.speed * 3.6f
-                )
+            val point = GpsPoint(
+                timestampMs = System.currentTimeMillis(),
+                lat = location.latitude,
+                lon = location.longitude,
+                speedKmh = location.speed * 3.6f
             )
+            synchronized(bufferLock) {
+                gpsBuffer.add(point)
+                gpsPointCount++
+            }
+            val dist = lastGpsPoint?.let { prev ->
+                val results = FloatArray(1)
+                Location.distanceBetween(prev.lat, prev.lon, point.lat, point.lon, results)
+                results[0].toDouble()
+            } ?: 0.0
+            if (dist > 1.0) totalDistanceMeters += dist
+            lastGpsPoint = point
         }
 
         override fun onProviderEnabled(provider: String) {}
@@ -116,14 +134,17 @@ class LoggerService : Service() {
             val x = event.values[0]
             val y = event.values[1]
             val z = event.values[2]
-            accelBuffer.add(
-                AccelPoint(
-                    timestampNano = System.nanoTime(),
-                    x = x,
-                    y = y,
-                    z = z
+            synchronized(bufferLock) {
+                accelBuffer.add(
+                    AccelPoint(
+                        timestampNano = System.nanoTime(),
+                        x = x,
+                        y = y,
+                        z = z
+                    )
                 )
-            )
+                accelPointCount++
+            }
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -131,14 +152,16 @@ class LoggerService : Service() {
 
     private val gyroListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            gyroBuffer.add(
-                GyroPoint(
-                    timestampNano = System.nanoTime(),
-                    x = event.values[0],
-                    y = event.values[1],
-                    z = event.values[2]
+            synchronized(bufferLock) {
+                gyroBuffer.add(
+                    GyroPoint(
+                        timestampNano = System.nanoTime(),
+                        x = event.values[0],
+                        y = event.values[1],
+                        z = event.values[2]
+                    )
                 )
-            )
+            }
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -150,15 +173,17 @@ class LoggerService : Service() {
             val y = event.values[1]
             val z = event.values[2]
             val w = if (event.values.size >= 4) event.values[3] else computeRotationScalar(x, y, z)
-            rotationBuffer.add(
-                RotationPoint(
-                    timestampNano = System.nanoTime(),
-                    x = x,
-                    y = y,
-                    z = z,
-                    w = w
+            synchronized(bufferLock) {
+                rotationBuffer.add(
+                    RotationPoint(
+                        timestampNano = System.nanoTime(),
+                        x = x,
+                        y = y,
+                        z = z,
+                        w = w
+                    )
                 )
-            )
+            }
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -170,7 +195,7 @@ class LoggerService : Service() {
     }
 
     private fun requestPhotoCapture() {
-        val last = gpsBuffer.lastOrNull()
+        val last = lastGpsPoint
         sendBroadcast(Intent(ACTION_CAPTURE_PHOTO).apply {
             putExtra(EXTRA_LAT, last?.lat ?: 0.0)
             putExtra(EXTRA_LON, last?.lon ?: 0.0)
@@ -224,7 +249,25 @@ class LoggerService : Service() {
         }
         fuzzyMatcher = FuzzyCauseMatcher(causeConfig)
 
+        recoverAbandonedDrafts()
         prepareVoskModel()
+    }
+
+    private fun recoverAbandonedDrafts() {
+        serviceScope.launch {
+            try {
+                val abandoned = database.tripDao().getAbandonedTrips()
+                if (abandoned.isEmpty()) return@launch
+                Log.i(TAG, "Cleaning up ${abandoned.size} abandoned draft trips")
+                for (trip in abandoned) {
+                    database.tripDao().deleteTripDataForTrip(trip.id)
+                    database.tripDao().deleteTrip(trip.id)
+                    Log.d(TAG, "Removed abandoned draft trip ${trip.id}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clean up abandoned drafts", e)
+            }
+        }
     }
 
     private fun prepareVoskModel() {
@@ -277,7 +320,8 @@ class LoggerService : Service() {
             stopRecording()
         }
         voskRecognizer?.destroy()
-        // serviceScope is not canceled here so the background flush coroutine can finish.
+        flushJob?.cancel()
+        // serviceScope is not canceled here so the background finalization coroutine can finish.
     }
 
     private fun startRecording() {
@@ -288,19 +332,38 @@ class LoggerService : Service() {
         startTimeMs = System.currentTimeMillis()
         startNanoTime = System.nanoTime()
         eventCount = 0
+        gpsPointCount = 0
+        accelPointCount = 0
+        totalDistanceMeters = 0.0
+        lastGpsPoint = null
+        endNanoTime = 0
         gpsLocked = false
 
-        gpsBuffer.clear()
-        accelBuffer.clear()
-        gyroBuffer.clear()
-        rotationBuffer.clear()
-        eventBuffer.clear()
+        causeBreakdownMap.clear()
+        synchronized(bufferLock) {
+            gpsBuffer.clear()
+            accelBuffer.clear()
+            gyroBuffer.clear()
+            rotationBuffer.clear()
+            eventBuffer.clear()
+        }
 
         wakeLock.acquire(60 * 60 * 1000L)
         Log.i(TAG, "WakeLock acquired")
 
         startForeground(NOTIFICATION_ID, buildNotification())
         Log.i(TAG, "Foreground service started")
+
+        serviceScope.launch {
+            draftTripId = createDraftTrip()
+            if (draftTripId < 0) {
+                Log.e(TAG, "Failed to create draft trip, recording may be lost")
+            } else {
+                draftReady.set(true)
+            }
+        }
+
+        startPeriodicFlush()
 
         try {
             locationManager.requestLocationUpdates(
@@ -342,10 +405,12 @@ class LoggerService : Service() {
     private fun stopRecording() {
         if (!isRunning.getAndSet(false)) return
 
-        Log.i(TAG, "stopRecording() called. GPS=${gpsBuffer.size}, Accel=${accelBuffer.size}, Gyro=${gyroBuffer.size}, Rot=${rotationBuffer.size}, Events=${eventBuffer.size}")
+        Log.i(TAG, "stopRecording() called. GPS=${gpsPointCount}, Accel=${accelPointCount}, Events=${eventCount}")
 
         handler.removeCallbacks(statusUpdateRunnable)
         handler.removeCallbacks(locationUpdateRunnable)
+        flushJob?.cancel()
+        flushJob = null
 
         try {
             locationManager.removeUpdates(gpsCallback)
@@ -368,14 +433,17 @@ class LoggerService : Service() {
         endNanoTime = System.nanoTime()
 
         serviceScope.launch {
-            Log.i(TAG, "Starting background flush")
+            Log.i(TAG, "Starting final flush and finalization")
             try {
-                flushToDatabase(endTimeMs, endNanoTime)
+                flushBuffersToDatabase()
+                finalizeTripAndBroadcast(endTimeMs, endNanoTime)
             } catch (e: Exception) {
-                Log.e(TAG, "Room backup failed", e)
+                Log.e(TAG, "Room finalization failed", e)
             }
 
             withContext(Dispatchers.Main) {
+                draftTripId = -1
+                draftReady.set(false)
                 if (wakeLock.isHeld) {
                     wakeLock.release()
                     Log.i(TAG, "WakeLock released")
@@ -385,6 +453,177 @@ class LoggerService : Service() {
                 Log.i(TAG, "Service stopped")
             }
         }
+    }
+
+    private suspend fun createDraftTrip(): Long {
+        val trip = Trip(
+            startTimeMs = startTimeMs,
+            endTimeMs = 0,
+            startNanoTime = startNanoTime,
+            endNanoTime = 0,
+            distanceMeters = 0.0,
+            eventCount = 0,
+            gpsPointCount = 0,
+            accelPointCount = 0,
+            causeBreakdown = "{}",
+            createdAt = 0,
+            status = TripStatus.RECORDING
+        )
+        return database.tripDao().insertTrip(trip)
+    }
+
+    private fun startPeriodicFlush() {
+        flushJob = serviceScope.launch {
+            while (isActive) {
+                delay(5_000L)
+                flushBuffersToDatabase()
+            }
+        }
+    }
+
+    private suspend fun flushBuffersToDatabase() {
+        if (!draftReady.get() || draftTripId < 0) return
+        val gpsSnapshot: List<GpsPoint>
+        val accelSnapshot: List<AccelPoint>
+        val gyroSnapshot: List<GyroPoint>
+        val rotSnapshot: List<RotationPoint>
+        val eventSnapshot: List<DelayEvent>
+        synchronized(bufferLock) {
+            gpsSnapshot = gpsBuffer.toList(); gpsBuffer.clear()
+            accelSnapshot = accelBuffer.toList(); accelBuffer.clear()
+            gyroSnapshot = gyroBuffer.toList(); gyroBuffer.clear()
+            rotSnapshot = rotationBuffer.toList(); rotationBuffer.clear()
+            eventSnapshot = eventBuffer.toList(); eventBuffer.clear()
+        }
+
+        if (gpsSnapshot.isEmpty() && accelSnapshot.isEmpty() && gyroSnapshot.isEmpty() &&
+            rotSnapshot.isEmpty() && eventSnapshot.isEmpty()) return
+
+        val rows = mutableListOf<TripData>()
+
+        gpsSnapshot.forEach { point ->
+            rows.add(
+                TripData(
+                    tripId = draftTripId,
+                    timestamp = point.timestampMs,
+                    latitude = point.lat,
+                    longitude = point.lon,
+                    speedKmh = point.speedKmh,
+                    accelZ = null,
+                    eventCause = null
+                )
+            )
+        }
+
+        accelSnapshot.forEach { point ->
+            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                point.timestampNano - startNanoTime
+            )
+            rows.add(
+                TripData(
+                    tripId = draftTripId,
+                    timestamp = timestampMs,
+                    latitude = null,
+                    longitude = null,
+                    speedKmh = null,
+                    accelX = point.x,
+                    accelY = point.y,
+                    accelZ = point.z,
+                    eventCause = null,
+                    rawTimestamp = point.timestampNano
+                )
+            )
+        }
+
+        gyroSnapshot.forEach { point ->
+            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                point.timestampNano - startNanoTime
+            )
+            rows.add(
+                TripData(
+                    tripId = draftTripId,
+                    timestamp = timestampMs,
+                    latitude = null,
+                    longitude = null,
+                    speedKmh = null,
+                    gyroX = point.x,
+                    gyroY = point.y,
+                    gyroZ = point.z,
+                    eventCause = null,
+                    rawTimestamp = point.timestampNano
+                )
+            )
+        }
+
+        rotSnapshot.forEach { point ->
+            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                point.timestampNano - startNanoTime
+            )
+            rows.add(
+                TripData(
+                    tripId = draftTripId,
+                    timestamp = timestampMs,
+                    latitude = null,
+                    longitude = null,
+                    speedKmh = null,
+                    rotX = point.x,
+                    rotY = point.y,
+                    rotZ = point.z,
+                    rotW = point.w,
+                    eventCause = null,
+                    rawTimestamp = point.timestampNano
+                )
+            )
+        }
+
+        eventSnapshot.forEach { event ->
+            rows.add(
+                TripData(
+                    tripId = draftTripId,
+                    timestamp = event.timestamp,
+                    latitude = null,
+                    longitude = null,
+                    speedKmh = null,
+                    accelZ = null,
+                    eventCause = event.causeCode
+                )
+            )
+        }
+
+        rows.chunked(500).forEach { chunk ->
+            database.tripDao().insertAll(chunk)
+        }
+
+        Log.d(TAG, "Flushed ${rows.size} rows to draft trip $draftTripId")
+    }
+
+    private suspend fun finalizeTripAndBroadcast(endTimeMs: Long, endNanoTime: Long) {
+        if (draftTripId < 0) return
+
+        val breakdown = JSONObject().apply {
+            synchronized(bufferLock) {
+                causeBreakdownMap.forEach { (cause, count) -> put(cause, count) }
+            }
+        }.toString()
+
+        database.tripDao().finalizeTrip(
+            tripId = draftTripId,
+            endTimeMs = endTimeMs,
+            endNanoTime = endNanoTime,
+            distanceMeters = totalDistanceMeters,
+            eventCount = eventCount,
+            gpsPointCount = gpsPointCount,
+            accelPointCount = accelPointCount,
+            causeBreakdown = breakdown,
+            createdAt = System.currentTimeMillis()
+        )
+
+        Log.i(TAG, "Finalized trip id=$draftTripId distance=${"%.1f".format(totalDistanceMeters)}m events=$eventCount gps=$gpsPointCount accel=$accelPointCount")
+
+        sendBroadcast(Intent(ACTION_TRIP_SAVED).apply {
+            putExtra(EXTRA_TRIP_ID, draftTripId)
+            putExtra(EXTRA_START_TIME_MS, startTimeMs)
+        })
     }
 
     private fun startVoskListening() {
@@ -473,12 +712,12 @@ class LoggerService : Service() {
     }
 
     private fun broadcastLatestLocation() {
-        val lastPoint = gpsBuffer.lastOrNull()
+        val lastPoint = lastGpsPoint
         if (lastPoint == null) {
-            Log.w(TAG, "broadcastLatestLocation: gpsBuffer is empty, nothing to broadcast")
+            Log.w(TAG, "broadcastLatestLocation: no GPS points yet, nothing to broadcast")
             return
         }
-        Log.i(TAG, "broadcastLatestLocation: lat=${lastPoint.lat} lon=${lastPoint.lon} speed=${lastPoint.speedKmh} bufferSize=${gpsBuffer.size}")
+        Log.i(TAG, "broadcastLatestLocation: lat=${lastPoint.lat} lon=${lastPoint.lon} speed=${lastPoint.speedKmh} gpsCount=$gpsPointCount")
         sendBroadcast(Intent(ACTION_LOCATION_UPDATE).apply {
             putExtra(EXTRA_LAT, lastPoint.lat)
             putExtra(EXTRA_LON, lastPoint.lon)
@@ -518,152 +757,17 @@ class LoggerService : Service() {
             timestamp = System.currentTimeMillis(),
             causeCode = causeCode
         )
-        eventBuffer.add(event)
-        eventCount++
+        synchronized(bufferLock) {
+            eventBuffer.add(event)
+            eventCount++
+            causeBreakdownMap[causeCode] = (causeBreakdownMap[causeCode] ?: 0) + 1
+        }
         broadcastCauseRecognized(causeCode)
 
         if (captureEnabled) {
             Log.i(TAG, "Triggering photo capture for cause: $causeCode")
             requestPhotoCapture()
         }
-    }
-
-    private suspend fun flushToDatabase(endTimeMs: Long, endNanoTime: Long) {
-        val distanceMeters = calculateTotalDistanceMeters()
-        val causeBreakdown = JSONObject().apply {
-            eventBuffer.groupBy { it.causeCode }
-                .mapValues { it.value.size }
-                .forEach { (cause, count) -> put(cause, count) }
-        }.toString()
-
-        val trip = Trip(
-            startTimeMs = startTimeMs,
-            endTimeMs = endTimeMs,
-            startNanoTime = startNanoTime,
-            endNanoTime = endNanoTime,
-            distanceMeters = distanceMeters,
-            eventCount = eventCount,
-            gpsPointCount = gpsBuffer.size,
-            accelPointCount = accelBuffer.size,
-            causeBreakdown = causeBreakdown,
-            createdAt = System.currentTimeMillis()
-        )
-
-        val tripId = database.tripDao().insertTrip(trip)
-        Log.i(TAG, "Saved trip summary id=$tripId distance=${"%.1f".format(distanceMeters)}m events=$eventCount gps=${gpsBuffer.size} accel=${accelBuffer.size} gyro=${gyroBuffer.size} rot=${rotationBuffer.size}")
-
-        sendBroadcast(Intent(ACTION_TRIP_SAVED).apply {
-            putExtra(EXTRA_TRIP_ID, tripId)
-            putExtra(EXTRA_START_TIME_MS, startTimeMs)
-        })
-
-        val rows = mutableListOf<TripData>()
-
-        gpsBuffer.forEach { point ->
-            rows.add(
-                TripData(
-                    tripId = tripId,
-                    timestamp = point.timestampMs,
-                    latitude = point.lat,
-                    longitude = point.lon,
-                    speedKmh = point.speedKmh,
-                    accelZ = null,
-                    eventCause = null
-                )
-            )
-        }
-
-        accelBuffer.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
-            )
-            rows.add(
-                TripData(
-                    tripId = tripId,
-                    timestamp = timestampMs,
-                    latitude = null,
-                    longitude = null,
-                    speedKmh = null,
-                    accelX = point.x,
-                    accelY = point.y,
-                    accelZ = point.z,
-                    eventCause = null,
-                    rawTimestamp = point.timestampNano
-                )
-            )
-        }
-
-        gyroBuffer.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
-            )
-            rows.add(
-                TripData(
-                    tripId = tripId,
-                    timestamp = timestampMs,
-                    latitude = null,
-                    longitude = null,
-                    speedKmh = null,
-                    gyroX = point.x,
-                    gyroY = point.y,
-                    gyroZ = point.z,
-                    eventCause = null,
-                    rawTimestamp = point.timestampNano
-                )
-            )
-        }
-
-        rotationBuffer.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
-            )
-            rows.add(
-                TripData(
-                    tripId = tripId,
-                    timestamp = timestampMs,
-                    latitude = null,
-                    longitude = null,
-                    speedKmh = null,
-                    rotX = point.x,
-                    rotY = point.y,
-                    rotZ = point.z,
-                    rotW = point.w,
-                    eventCause = null,
-                    rawTimestamp = point.timestampNano
-                )
-            )
-        }
-
-        eventBuffer.forEach { event ->
-            rows.add(
-                TripData(
-                    tripId = tripId,
-                    timestamp = event.timestamp,
-                    latitude = null,
-                    longitude = null,
-                    speedKmh = null,
-                    accelZ = null,
-                    eventCause = event.causeCode
-                )
-            )
-        }
-
-        rows.chunked(500).forEach { chunk ->
-            database.tripDao().insertAll(chunk)
-        }
-    }
-
-    private fun calculateTotalDistanceMeters(): Double {
-        if (gpsBuffer.size < 2) return 0.0
-        val results = FloatArray(1)
-        var total = 0.0
-        for (i in 1 until gpsBuffer.size) {
-            val prev = gpsBuffer[i - 1]
-            val curr = gpsBuffer[i]
-            Location.distanceBetween(prev.lat, prev.lon, curr.lat, curr.lon, results)
-            total += results[0]
-        }
-        return total
     }
 
     private fun createNotificationChannel() {

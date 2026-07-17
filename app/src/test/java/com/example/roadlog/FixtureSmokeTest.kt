@@ -85,4 +85,34 @@ class FixtureSmokeTest {
         assertTrue(a.startTimeMs < b.startTimeMs)
         assertTrue(a.endTimeMs < b.endTimeMs)
     }
+
+    @Test
+    fun `fixture trips default to completed status`() {
+        assertEquals(TripStatus.COMPLETED, TestFixtures.tripA().status)
+        assertEquals(TripStatus.COMPLETED, TestFixtures.tripB().status)
+        assertEquals(TripStatus.COMPLETED, TestFixtures.largeTrip().status)
+    }
+
+    @Test
+    fun `trip status constants are distinct`() {
+        assertNotEquals(TripStatus.COMPLETED, TripStatus.RECORDING)
+        assertNotEquals(TripStatus.COMPLETED, TripStatus.ABANDONED)
+        assertNotEquals(TripStatus.RECORDING, TripStatus.ABANDONED)
+    }
+
+    @Test
+    fun `recording trip can be created with explicit status`() {
+        val recording = Trip(
+            startTimeMs = 1000L,
+            endTimeMs = 0,
+            distanceMeters = 0.0,
+            eventCount = 0,
+            gpsPointCount = 0,
+            accelPointCount = 0,
+            causeBreakdown = "{}",
+            createdAt = 0,
+            status = TripStatus.RECORDING
+        )
+        assertEquals(TripStatus.RECORDING, recording.status)
+    }
 }

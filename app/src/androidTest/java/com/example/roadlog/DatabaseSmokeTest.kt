@@ -130,12 +130,125 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `all trips show in history`() = runTest {
+    fun `completed trips appear in history`() = runTest {
         db.tripDao().insertTrip(TestFixtures.tripA())
         db.tripDao().insertTrip(TestFixtures.tripB())
 
         val all = db.tripDao().getAllTrips()
         assertEquals(2, all.size)
         assertTrue(all[0].startTimeMs >= all[1].startTimeMs)
+        all.forEach { assertEquals(TripStatus.COMPLETED, it.status) }
+    }
+
+    @Test
+    fun `draft trip excluded from history`() = runTest {
+        val draft = Trip(
+            startTimeMs = TestFixtures.BASE_TIME_MS,
+            endTimeMs = 0,
+            distanceMeters = 0.0,
+            eventCount = 0,
+            gpsPointCount = 0,
+            accelPointCount = 0,
+            causeBreakdown = "{}",
+            createdAt = 0,
+            status = TripStatus.RECORDING
+        )
+        db.tripDao().insertTrip(draft)
+
+        val all = db.tripDao().getAllTrips()
+        assertEquals(0, all.size)
+    }
+
+    @Test
+    fun `draft trip visible by ID even when excluded from history`() = runTest {
+        val draft = Trip(
+            startTimeMs = TestFixtures.BASE_TIME_MS,
+            endTimeMs = 0,
+            distanceMeters = 0.0,
+            eventCount = 0,
+            gpsPointCount = 0,
+            accelPointCount = 0,
+            causeBreakdown = "{}",
+            createdAt = 0,
+            status = TripStatus.RECORDING
+        )
+        val id = db.tripDao().insertTrip(draft)
+        val loaded = db.tripDao().getTripById(id)
+        assertNotNull(loaded)
+        assertEquals(TripStatus.RECORDING, loaded!!.status)
+    }
+
+    @Test
+    fun `finalize trip marks completed and writes summary fields`() = runTest {
+        val draft = Trip(
+            startTimeMs = TestFixtures.BASE_TIME_MS,
+            endTimeMs = 0,
+            startNanoTime = 1000,
+            distanceMeters = 0.0,
+            eventCount = 0,
+            gpsPointCount = 0,
+            accelPointCount = 0,
+            causeBreakdown = "{}",
+            createdAt = 0,
+            status = TripStatus.RECORDING
+        )
+        val id = db.tripDao().insertTrip(draft)
+
+        val rows = TestFixtures.allRowsForTrip(id, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS)
+        db.tripDao().insertAll(rows)
+
+        db.tripDao().finalizeTrip(
+            tripId = id,
+            endTimeMs = TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS,
+            endNanoTime = 2000,
+            distanceMeters = 12300.0,
+            eventCount = 4,
+            gpsPointCount = 100,
+            accelPointCount = 200,
+            causeBreakdown = "{\"SIGNAL\":1,\"QUEUE\":1,\"BUS\":1,\"POTHOLE\":1}",
+            createdAt = TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS
+        )
+
+        val finalized = db.tripDao().getTripById(id)!!
+        assertEquals(TripStatus.COMPLETED, finalized.status)
+        assertEquals(12300.0, finalized.distanceMeters, 0.01)
+        assertEquals(4, finalized.eventCount)
+        assertEquals(100, finalized.gpsPointCount)
+        assertEquals(200, finalized.accelPointCount)
+
+        val history = db.tripDao().getAllTrips()
+        assertEquals(1, history.size)
+    }
+
+    @Test
+    fun `abandoned drafts can be cleaned up`() = runTest {
+        val draft1 = Trip(
+            startTimeMs = TestFixtures.BASE_TIME_MS,
+            endTimeMs = 0,
+            distanceMeters = 0.0, eventCount = 0, gpsPointCount = 0, accelPointCount = 0,
+            causeBreakdown = "{}", createdAt = 0, status = TripStatus.RECORDING
+        )
+        val id1 = db.tripDao().insertTrip(draft1)
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id1, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + 1000, 5))
+
+        val draft2 = Trip(
+            startTimeMs = TestFixtures.BASE_TIME_MS + 10000,
+            endTimeMs = 0,
+            distanceMeters = 0.0, eventCount = 0, gpsPointCount = 0, accelPointCount = 0,
+            causeBreakdown = "{}", createdAt = 0, status = TripStatus.RECORDING
+        )
+        val id2 = db.tripDao().insertTrip(draft2)
+        db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id2, TestFixtures.BASE_TIME_MS + 10000, TestFixtures.BASE_TIME_MS + 11000, 5))
+
+        val abandoned = db.tripDao().getAbandonedTrips()
+        assertEquals(2, abandoned.size)
+
+        for (trip in abandoned) {
+            db.tripDao().deleteTripDataForTrip(trip.id)
+            db.tripDao().deleteTrip(trip.id)
+        }
+
+        assertEquals(0, db.tripDao().getAbandonedTrips().size)
+        assertEquals(0, db.tripDao().getAllTrips().size)
     }
 }
