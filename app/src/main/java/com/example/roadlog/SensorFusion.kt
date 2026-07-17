@@ -140,7 +140,10 @@ fun computeWorldGyro(
  * Preserves first and last items.
  */
 fun <T> downsampleToCount(items: List<T>, maxCount: Int): List<T> {
-    if (items.size <= maxCount || maxCount <= 2) return items
+    if (items.isEmpty() || maxCount <= 0) return emptyList()
+    if (maxCount == 1) return listOf(items.first())
+    if (maxCount == 2) return listOf(items.first(), items.last())
+    if (items.size <= maxCount) return items
     val step = (items.size - 1).toDouble() / (maxCount - 1)
     return (0 until maxCount).map { items[(it * step).toInt().coerceIn(0, items.lastIndex)] }
 }

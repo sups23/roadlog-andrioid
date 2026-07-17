@@ -27,6 +27,8 @@ class TripDetailActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RoadLog"
+        private const val VISUAL_ROW_LIMIT = 5_000
+        private const val VISUAL_SENSOR_LIMIT = 30_000
     }
 
     private lateinit var database: AppDatabase
@@ -160,59 +162,53 @@ class TripDetailActivity : AppCompatActivity() {
         Log.d(TAG, "Loading trip details: tripId=$tripId, start=$tripStart, end=$tripEnd")
         scope.launch {
             try {
-                val tripLoadStart = System.currentTimeMillis()
                 val trip = withContext(Dispatchers.IO) {
                     database.tripDao().getTripById(tripId)
                 }
-                Log.d(TAG, "getTripById took ${System.currentTimeMillis() - tripLoadStart}ms")
                 if (trip == null) {
                     Log.e(TAG, "Trip not found for id=$tripId")
                     eventsText.text = "Trip not found"
                     showLoading(false)
                     return@launch
                 }
-                Log.d(TAG, "Trip found: id=${trip.id}, startMs=${trip.startTimeMs}, endMs=${trip.endTimeMs}")
+                ensureActive()
 
                 setStatus("Querying GPS and sensor data...")
                 val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGpsForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getGpsForTripCapped(tripId, tripStart, tripEnd, VISUAL_ROW_LIMIT)
                 }
                 gpsRouteData = gpsData
                 val events = withContext(Dispatchers.IO) {
                     database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
                 }
                 val accelData = withContext(Dispatchers.IO) {
-                    database.tripDao().getAccelForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getAccelForTripCapped(tripId, tripStart, tripEnd, VISUAL_SENSOR_LIMIT)
                 }
                 val gyroData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGyroForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getGyroForTripCapped(tripId, tripStart, tripEnd, VISUAL_SENSOR_LIMIT)
                 }
                 val rotationData = withContext(Dispatchers.IO) {
-                    database.tripDao().getRotationForTrip(tripId, tripStart, tripEnd)
+                    database.tripDao().getRotationForTripCapped(tripId, tripStart, tripEnd, VISUAL_SENSOR_LIMIT)
                 }
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
                 }
-                Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; counts: gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rotation=${rotationData.size}, photos=${photos.size}")
+                Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rot=${rotationData.size}, photos=${photos.size}")
+                ensureActive()
 
                 setStatus("Computing sensor fusion...")
-                val fusionStart = System.currentTimeMillis()
-                Log.d(TAG, "Computing world accel...")
                 val worldAccel = withContext(Dispatchers.Default) {
                     computeWorldAccel(accelData, rotationData)
                 }
                 worldAccelData = worldAccel
-                Log.d(TAG, "Computing world gyro...")
                 val worldGyro = withContext(Dispatchers.Default) {
                     computeWorldGyro(gyroData, rotationData)
                 }
                 worldGyroData = worldGyro
-                Log.d(TAG, "Sensor fusion took ${System.currentTimeMillis() - fusionStart}ms")
+                ensureActive()
 
                 setStatus("Preparing charts...")
-                val bindStart = System.currentTimeMillis()
-                Log.d(TAG, "Binding UI...")
                 bindHeader(trip, gpsData)
                 bindBreakdown(trip.causeBreakdown)
                 bindTimeline(events, trip.startTimeMs)
@@ -222,10 +218,10 @@ class TripDetailActivity : AppCompatActivity() {
                 bindLongitudinalChart(worldAccel)
                 bindYawChart(worldGyro)
                 bindPhotos(photos)
-                Log.d(TAG, "UI binding took ${System.currentTimeMillis() - bindStart}ms")
 
-                Log.d(TAG, "Trip details ready, hiding loader")
                 showLoading(false)
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Trip detail loading cancelled")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load trip details", e)
                 showLoading(false)
@@ -493,39 +489,61 @@ class TripDetailActivity : AppCompatActivity() {
         photosContainer.visibility = View.VISIBLE
         val size = resources.getDimensionPixelSize(R.dimen.photo_thumbnail_size)
         val margin = resources.getDimensionPixelSize(R.dimen.photo_thumbnail_margin)
-        for (photo in photos) {
-            val file = java.io.File(photo.filePath)
-            if (!file.exists()) continue
-            val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+        scope.launch {
+            for (photo in photos) {
+                ensureActive()
+                val file = java.io.File(photo.filePath)
+                if (!file.exists()) continue
+                val bitmap = withContext(Dispatchers.IO) {
+                    decodeSampledBitmap(file.absolutePath, size)
+                } ?: continue
+                ensureActive()
 
-            val photoCard = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(margin, 0, margin, 0)
+                val photoCard = LinearLayout(this@TripDetailActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(margin, 0, margin, 0)
+                    }
                 }
-            }
 
-            val imageView = ImageView(this).apply {
-                setImageBitmap(bitmap)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                layoutParams = LinearLayout.LayoutParams(size, size)
-            }
+                val imageView = ImageView(this@TripDetailActivity).apply {
+                    setImageBitmap(bitmap)
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    layoutParams = LinearLayout.LayoutParams(size, size)
+                }
 
-            val timeText = TextView(this).apply {
-                text = timeFormatter.format(java.util.Date(photo.timestamp))
-                textSize = 12f
-                setTextColor(ContextCompat.getColor(this@TripDetailActivity, R.color.black))
-            }
+                val timeText = TextView(this@TripDetailActivity).apply {
+                    text = timeFormatter.format(java.util.Date(photo.timestamp))
+                    textSize = 12f
+                    setTextColor(ContextCompat.getColor(this@TripDetailActivity, R.color.black))
+                }
 
-            photoCard.addView(imageView)
-            photoCard.addView(timeText)
-            photosContainer.addView(photoCard)
+                photoCard.addView(imageView)
+                photoCard.addView(timeText)
+                photosContainer.addView(photoCard)
+            }
+            if (photosContainer.childCount == 0) {
+                photosContainer.visibility = View.GONE
+            }
         }
-        if (photosContainer.childCount == 0) {
-            photosContainer.visibility = View.GONE
+    }
+
+    private fun decodeSampledBitmap(path: String, targetSize: Int): android.graphics.Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, options)
+            val sampleSize = maxOf(1, maxOf(options.outWidth, options.outHeight) / targetSize)
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+            }.let { opts ->
+                BitmapFactory.decodeFile(path, opts)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decode photo $path", e)
+            null
         }
     }
 

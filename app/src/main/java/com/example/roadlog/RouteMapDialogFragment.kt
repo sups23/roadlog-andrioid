@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -27,6 +28,7 @@ import org.osmdroid.views.overlay.Polyline
 class RouteMapDialogFragment : DialogFragment() {
 
     companion object {
+        private const val TAG = "RoadLog"
         private var pendingGpsData: List<TripData>? = null
         private var pendingWorldAccel: List<WorldAccelSample>? = null
         private var pendingWorldGyro: List<WorldGyroSample>? = null
@@ -172,20 +174,34 @@ class RouteMapDialogFragment : DialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        gpsData = pendingGpsData ?: emptyList()
-        worldAccel = pendingWorldAccel ?: emptyList()
-        worldGyro = pendingWorldGyro ?: emptyList()
-        pendingGpsData = null
-        pendingWorldAccel = null
-        pendingWorldGyro = null
-        geoPoints = gpsData.map { GeoPoint(it.latitude ?: 0.0, it.longitude ?: 0.0) }
+        val restored = savedInstanceState?.let { state ->
+            this.gpsData = emptyList()
+            this.worldAccel = emptyList()
+            this.worldGyro = emptyList()
+            true
+        } ?: run {
+            gpsData = pendingGpsData ?: emptyList()
+            worldAccel = pendingWorldAccel ?: emptyList()
+            worldGyro = pendingWorldGyro ?: emptyList()
+            pendingGpsData = null
+            pendingWorldAccel = null
+            pendingWorldGyro = null
+            false
+        }
+        geoPoints = gpsData.filter { it.latitude != null && it.longitude != null }
+            .map { GeoPoint(it.latitude!!, it.longitude!!) }
+        // Also filter gpsData to match geoPoints so segment indices align.
+        gpsData = gpsData.filter { it.latitude != null && it.longitude != null }
+        if (geoPoints.isEmpty() && !restored) {
+            Log.w(TAG, "RouteMapDialogFragment: no valid GPS points to display")
+        }
         selectParameter("")
     }
 
     private fun selectParameter(param: String) {
         activeParam = param
         mapView.overlays.clear()
-        if (gpsData.isEmpty()) return
+        if (geoPoints.isEmpty()) return
 
         if (activeParam.isEmpty()) {
             val route = Polyline().apply {
@@ -196,30 +212,39 @@ class RouteMapDialogFragment : DialogFragment() {
             mapView.overlays.add(route)
         } else {
             val segmentValues = computeSegmentValues(activeParam)
-            val maxVal = segmentValues.maxOrNull() ?: 0.0
-            val minVal = 0.0
-
-            var groupColor = paramColor(segmentValues.firstOrNull() ?: 0.0, minVal, maxVal)
-            var groupStart = 0
-            for (i in 1 until segmentValues.size) {
-                val color = paramColor(segmentValues[i], minVal, maxVal)
-                if (color != groupColor) {
-                    val segment = Polyline().apply {
-                        outlinePaint.color = groupColor
-                        outlinePaint.strokeWidth = 8f
-                        setPoints(geoPoints.subList(groupStart, i + 1))
-                    }
-                    mapView.overlays.add(segment)
-                    groupStart = i
-                    groupColor = color
+            if (segmentValues.isEmpty()) {
+                val route = Polyline().apply {
+                    outlinePaint.color = ContextCompat.getColor(requireContext(), R.color.teal_700)
+                    outlinePaint.strokeWidth = 8f
+                    setPoints(geoPoints)
                 }
+                mapView.overlays.add(route)
+            } else {
+                val maxVal = segmentValues.maxOrNull() ?: 0.0
+                val minVal = 0.0
+
+                var groupColor = paramColor(segmentValues.firstOrNull() ?: 0.0, minVal, maxVal)
+                var groupStart = 0
+                for (i in 1 until segmentValues.size) {
+                    val color = paramColor(segmentValues[i], minVal, maxVal)
+                    if (color != groupColor) {
+                        val segment = Polyline().apply {
+                            outlinePaint.color = groupColor
+                            outlinePaint.strokeWidth = 8f
+                            setPoints(geoPoints.subList(groupStart, i + 1))
+                        }
+                        mapView.overlays.add(segment)
+                        groupStart = i
+                        groupColor = color
+                    }
+                }
+                val finalSeg = Polyline().apply {
+                    outlinePaint.color = groupColor
+                    outlinePaint.strokeWidth = 8f
+                    setPoints(geoPoints.subList(groupStart, geoPoints.size))
+                }
+                mapView.overlays.add(finalSeg)
             }
-            val finalSeg = Polyline().apply {
-                outlinePaint.color = groupColor
-                outlinePaint.strokeWidth = 8f
-                setPoints(geoPoints.subList(groupStart, geoPoints.size))
-            }
-            mapView.overlays.add(finalSeg)
         }
 
         addMarkers()
@@ -228,8 +253,8 @@ class RouteMapDialogFragment : DialogFragment() {
     }
 
     private fun computeSegmentValues(param: String): List<Double> {
+        if (gpsData.size < 2) return emptyList()
         val values = MutableList(gpsData.size - 1) { 0.0 }
-        if (gpsData.size < 2) return values
 
         val sums = DoubleArray(gpsData.size - 1)
         val counts = IntArray(gpsData.size - 1)

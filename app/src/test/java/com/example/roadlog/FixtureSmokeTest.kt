@@ -115,4 +115,43 @@ class FixtureSmokeTest {
         )
         assertEquals(TripStatus.RECORDING, recording.status)
     }
+
+    @Test
+    fun `downsampleToCount returns empty for empty input`() {
+        assertEquals(0, downsampleToCount(emptyList<String>(), 10).size)
+    }
+
+    @Test
+    fun `downsampleToCount returns empty for zero or negative maxCount`() {
+        val items = listOf(1, 2, 3, 4, 5)
+        assertEquals(0, downsampleToCount(items, 0).size)
+        assertEquals(0, downsampleToCount(items, -1).size)
+    }
+
+    @Test
+    fun `downsampleToCount returns first item for maxCount 1`() {
+        val items = listOf(1, 2, 3)
+        assertEquals(listOf(1), downsampleToCount(items, 1))
+    }
+
+    @Test
+    fun `downsampleToCount returns first and last for maxCount 2`() {
+        val items = listOf(1, 2, 3, 4, 5)
+        assertEquals(listOf(1, 5), downsampleToCount(items, 2))
+    }
+
+    @Test
+    fun `downsampleToCount returns all items when fewer than maxCount`() {
+        val items = listOf(1, 2, 3)
+        assertEquals(items, downsampleToCount(items, 10))
+    }
+
+    @Test
+    fun `downsampleToCount produces evenly spaced output`() {
+        val items = (0..99).toList()
+        val result = downsampleToCount(items, 10)
+        assertEquals(10, result.size)
+        assertEquals(0, result.first())
+        assertEquals(99, result.last())
+    }
 }
