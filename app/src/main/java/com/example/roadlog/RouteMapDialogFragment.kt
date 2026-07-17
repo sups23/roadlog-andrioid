@@ -88,7 +88,7 @@ class RouteMapDialogFragment : DialogFragment() {
         }
 
         val paramBar = LinearLayout(requireContext()).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.argb(180, 0, 0, 0))
             setPadding(8, 8, 8, 8)
             layoutParams = FrameLayout.LayoutParams(
@@ -103,6 +103,12 @@ class RouteMapDialogFragment : DialogFragment() {
 
         val paramLabels = listOf("Spd", "Rgh", "Lat", "Lng", "Yaw")
         val paramKeys = listOf("speed", "roughness", "lateral", "longitudinal", "yaw")
+        val row1 = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        val row2 = LinearLayout(requireContext()).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
         for (i in paramLabels.indices) {
             val btn = Button(requireContext()).apply {
                 text = paramLabels[i]
@@ -111,10 +117,10 @@ class RouteMapDialogFragment : DialogFragment() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { rightMargin = 4 }
+                ).apply { rightMargin = 4; bottomMargin = 4 }
                 setOnClickListener { selectParameter(paramKeys[i]) }
             }
-            paramBar.addView(btn)
+            if (i < 3) row1.addView(btn) else row2.addView(btn)
         }
 
         val noneBtn = Button(requireContext()).apply {
@@ -127,7 +133,7 @@ class RouteMapDialogFragment : DialogFragment() {
             )
             setOnClickListener { selectParameter("") }
         }
-        paramBar.addView(noneBtn)
+        row2.addView(noneBtn)
 
         val bottomBar = FrameLayout(requireContext()).apply {
             setBackgroundColor(Color.argb(180, 0, 0, 0))
