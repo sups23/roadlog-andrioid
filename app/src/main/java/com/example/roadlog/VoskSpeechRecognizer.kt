@@ -13,18 +13,6 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.StorageService
 
-/**
- * Offline speech recognition using Vosk with a direct AudioRecord loop.
- *
- * Mirrors Vosk's SpeechService recognizer thread: a single Recognizer is fed
- * continuous audio, and we rely on Vosk's internal utterance segmentation
- * (no explicit reset between utterances).
- *
- * When a grammar is supplied, the recognizer is constrained to only the listed
- * phrases, which dramatically improves accuracy for a fixed command vocabulary.
- * Word-level confidence is enabled so the caller can reject low-confidence
- * recognitions caused by random speech or noise.
- */
 class VoskSpeechRecognizer(
     private val context: Context,
     private val grammarJson: String? = null
@@ -37,256 +25,288 @@ class VoskSpeechRecognizer(
         fun onError(error: String)
     }
 
-    private var model: Model? = null
-    private var recognizer: Recognizer? = null
-    private var audioRecord: AudioRecord? = null
-    private var callback: Callback? = null
-    private var isReady = false
-    private var isListening = false
-
     private val sampleRate = 16000
     private val modelPath = "model-en-us"
 
+    private val lifecycleMutex = kotlinx.coroutines.sync.Mutex()
     private val recognizerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var recognitionJob: Job? = null
+
+    private var preparedModel: Model? = null
+    private var preparedRecognizer: Recognizer? = null
+    private var isPrepared = false
+
+    private var sessionGeneration = 0L
+    private var sessionRecorder: AudioRecord? = null
+    private var sessionRecognizer: Recognizer? = null
+    private var sessionCallback: Callback? = null
+    private var sessionJob: Job? = null
+    @Volatile
+    private var sessionListening = false
+
+    private var preparationGeneration = 0L
 
     init {
         LibVosk.setLogLevel(LogLevel.INFO)
     }
 
-    /**
-     * Unpacks the model from assets and loads it. Calls [onReady] when done.
-     */
     fun prepare(onReady: () -> Unit, onError: (String) -> Unit) {
-        if (isReady) {
+        if (isPrepared) {
             onReady()
             return
         }
 
-        Log.i(TAG, "Unpacking Vosk model from assets...")
-        StorageService.unpack(
-            context,
-            modelPath,
-            "model",
-            { unpackedModel ->
-                model = unpackedModel
-                try {
-                    // Use the grammar-constrained recognizer when a grammar is supplied.
-                    // This limits the decoder to only the phrases listed in the grammar,
-                    // which dramatically improves accuracy for a small, fixed command
-                    // vocabulary compared to the free-form English recognizer.
-                    recognizer = if (grammarJson != null) {
-                        Log.i(TAG, "Creating grammar-constrained Vosk recognizer")
-                        Recognizer(unpackedModel, sampleRate.toFloat(), grammarJson)
-                    } else {
-                        Log.i(TAG, "Creating free-form Vosk recognizer")
-                        Recognizer(unpackedModel, sampleRate.toFloat())
+        val gen = ++preparationGeneration
+        Log.i(TAG, "Unpacking Vosk model from assets (gen=$gen)...")
+        recognizerScope.launch {
+            StorageService.unpack(
+                context,
+                modelPath,
+                "model",
+                { unpackedModel ->
+                    if (gen != preparationGeneration) {
+                        Log.w(TAG, "Ignoring stale model completion gen=$gen, current=$preparationGeneration")
+                        unpackedModel.close()
+                        return@unpack
                     }
-
-                    // Enable word-level timestamps/confidence so we can compute a
-                    // phrase confidence score for rejection of random speech.
-                    recognizer?.setWords(true)
-
-                    isReady = true
-                    Log.i(TAG, "Vosk model and recognizer ready")
-                    onReady()
-                } catch (e: Exception) {
-                    val msg = "Failed to create Vosk recognizer: ${e.message}"
-                    Log.e(TAG, msg, e)
+                    try {
+                        val rec = if (grammarJson != null) {
+                            Log.i(TAG, "Creating grammar-constrained Vosk recognizer")
+                            Recognizer(unpackedModel, sampleRate.toFloat(), grammarJson)
+                        } else {
+                            Log.i(TAG, "Creating free-form Vosk recognizer")
+                            Recognizer(unpackedModel, sampleRate.toFloat())
+                        }
+                        rec.setWords(true)
+                        preparedModel = unpackedModel
+                        preparedRecognizer = rec
+                        isPrepared = true
+                        Log.i(TAG, "Vosk model and recognizer ready")
+                        onReady()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to create Vosk recognizer", e)
+                        unpackedModel.close()
+                        onError("Failed to create Vosk recognizer: ${e.message}")
+                    }
+                },
+                { exception ->
+                    val msg = "Failed to unpack Vosk model: ${exception.message}"
+                    Log.e(TAG, msg, exception)
                     onError(msg)
                 }
-            },
-            { exception ->
-                val msg = "Failed to unpack Vosk model: ${exception.message}"
-                Log.e(TAG, msg, exception)
-                onError(msg)
-            }
-        )
+            )
+        }
     }
 
-    /**
-     * Starts listening to the microphone.
-     */
     fun startListening(callback: Callback) {
-        this.callback = callback
+        recognizerScope.launch {
+            lifecycleMutex.withLock {
+                if (!isPrepared || preparedRecognizer == null) {
+                    callback.onError("Vosk model not ready")
+                    return@withLock
+                }
 
-        if (!isReady) {
-            callback.onError("Vosk model not ready")
-            return
-        }
+                stopSessionLocked()
 
-        // Stop any previous loop / recording so we never run two loops concurrently.
-        stopInternal()
+                val gen = ++sessionGeneration
+                val rec = preparedRecognizer!!
 
-        try {
-            val minBufferSize = AudioRecord.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-            if (minBufferSize <= 0) {
-                callback.onError("Invalid AudioRecord buffer size: $minBufferSize")
-                return
+                val minBufferSize = AudioRecord.getMinBufferSize(
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                if (minBufferSize <= 0) {
+                    callback.onError("Invalid AudioRecord buffer size: $minBufferSize")
+                    return@withLock
+                }
+
+                val desiredBufferSize = (sampleRate * 0.2f).toInt()
+                val internalBufferSize = maxOf(minBufferSize, desiredBufferSize) * 2
+                val readBufferSize = maxOf(minBufferSize, desiredBufferSize)
+
+                val recorder = try {
+                    val ar = AudioRecord(
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                        sampleRate,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        internalBufferSize
+                    )
+                    if (ar.state != AudioRecord.STATE_INITIALIZED) {
+                        ar.release()
+                        callback.onError("AudioRecord failed to initialize")
+                        return@withLock
+                    }
+                    ar
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to create AudioRecord", e)
+                    callback.onError("Failed to create AudioRecord: ${e.message}")
+                    return@withLock
+                }
+
+                sessionRecorder = recorder
+                sessionRecognizer = rec
+                sessionCallback = callback
+                sessionListening = true
+
+                val localRecorder = recorder
+                val localRecognizer = rec
+                val localCallback = callback
+
+                recorder.startRecording()
+                Log.i(TAG, "AudioRecord started gen=$gen readBuffer=$readBufferSize internal=$internalBufferSize")
+                callback.onReady()
+
+                sessionJob = recognizerScope.launch {
+                    runRecognitionLoop(gen, localRecorder, localRecognizer, localCallback, readBufferSize)
+                }
             }
-
-            // Match Vosk SpeechService: ~200ms read chunks, double for AudioRecord internal buffer.
-            val bufferSize = (sampleRate * 0.2f).toInt()
-            val internalBufferSize = bufferSize * 2
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                internalBufferSize
-            )
-
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                callback.onError("AudioRecord failed to initialize")
-                return
-            }
-
-            isListening = true
-            audioRecord?.startRecording()
-            Log.i(TAG, "AudioRecord started, readBuffer=$bufferSize, internalBuffer=$internalBufferSize, recordingState=${audioRecord?.recordingState}")
-            callback.onReady()
-
-            recognitionJob = recognizerScope.launch {
-                runRecognitionLoop(bufferSize)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start Vosk listening", e)
-            callback.onError("Failed to start listening: ${e.message}")
-            isListening = false
         }
     }
 
-    /**
-     * Stops listening and releases the audio recorder.
-     */
     fun stop() {
-        stopInternal()
-        callback = null
-    }
-
-    private fun stopInternal() {
-        isListening = false
-        recognitionJob?.cancel()
-        recognitionJob = null
-        stopAudioRecord()
-    }
-
-    /**
-     * Releases the loaded model and recognizer. Call when permanently done.
-     */
-    fun destroy() {
-        stopInternal()
-        recognizerScope.cancel()
-        recognizer?.close()
-        recognizer = null
-        model?.close()
-        model = null
-        isReady = false
-        callback = null
-    }
-
-    private suspend fun runRecognitionLoop(bufferSize: Int) {
-        val buffer = ShortArray(bufferSize)
-        val currentRecognizer = recognizer ?: run {
-            callback?.onError("Recognizer not available")
-            return
+        recognizerScope.launch {
+            lifecycleMutex.withLock {
+                stopSessionLocked()
+                sessionCallback = null
+            }
         }
+    }
 
-        Log.i(TAG, "runRecognitionLoop started: recognizer=$currentRecognizer, bufferSize=$bufferSize")
+    fun destroy() {
+        recognizerScope.launch {
+            lifecycleMutex.withLock {
+                isPrepared = false
+                preparationGeneration++
+                stopSessionLocked()
+                sessionCallback = null
+                try { preparedRecognizer?.close() } catch (_: Exception) {}
+                preparedRecognizer = null
+                try { preparedModel?.close() } catch (_: Exception) {}
+                preparedModel = null
+                Log.i(TAG, "Vosk resources destroyed")
+            }
+        }
+    }
+
+    private fun stopSessionLocked() {
+        sessionListening = false
+        val job = sessionJob
+        val recorder = sessionRecorder
+
+        try { recorder?.stop() } catch (_: Exception) {}
+
+        sessionJob = null
+        sessionRecorder = null
+        sessionRecognizer = null
+
+        try { recorder?.release() } catch (_: Exception) {}
+    }
+
+    private suspend fun runRecognitionLoop(
+        gen: Long,
+        recorder: AudioRecord,
+        recognizer: Recognizer,
+        callback: Callback,
+        bufferSize: Int
+    ) {
+        val buffer = ShortArray(bufferSize)
+        Log.i(TAG, "runRecognitionLoop started gen=$gen")
 
         var iterations = 0L
         var lastPartial = ""
         var consecutiveReadErrors = 0
+        var consecutiveZeroReads = 0
         val maxConsecutiveReadErrors = 5
+        val maxConsecutiveZeroReads = 100
 
-        withContext(Dispatchers.IO) {
-            while (isListening && isActive) {
-                try {
-                    iterations++
-                    val recordingState = audioRecord?.recordingState
-                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: -1
-
-                    Log.v(TAG, "iter=$iterations read=$read recState=$recordingState isListening=$isListening")
-
-                    if (read < 0) {
-                        consecutiveReadErrors++
-                        Log.e(TAG, "AudioRecord read error: $read (consecutive=$consecutiveReadErrors)")
-                        if (consecutiveReadErrors >= maxConsecutiveReadErrors) {
-                            callback?.onError("AudioRecord read failed repeatedly")
-                            break
-                        }
-                        delay(50)
-                        continue
-                    }
-                    if (read == 0) {
-                        Log.v(TAG, "iter=$iterations read=0, skipping")
-                        continue
-                    }
-                    consecutiveReadErrors = 0
-
-                    // Periodically log audio level so we can verify the mic is still delivering audio.
-                    if (iterations % 25 == 0L) {
-                        val level = audioLevel(buffer, read)
-                        Log.d(TAG, "iter=$iterations audioLevel=$level read=$read")
-                    }
-
-                    val isEndpoint = currentRecognizer.acceptWaveForm(buffer, read)
-                    Log.v(TAG, "iter=$iterations acceptWaveForm endpoint=$isEndpoint")
-
-                    if (isEndpoint) {
-                        val resultJson = currentRecognizer.result
-                        val text = extractText(resultJson)
-                        val confidence = extractConfidence(resultJson)
-                        Log.i(TAG, "Vosk FINAL result: raw=$resultJson | text='$text' | confidence=$confidence | iter=$iterations")
-                        callback?.onResult(text, confidence)
-                        lastPartial = ""
-                    } else {
-                        val partialJson = currentRecognizer.partialResult
-                        val text = extractPartialText(partialJson)
-                        Log.v(TAG, "Vosk PARTIAL result: raw=$partialJson | text='$text' | iter=$iterations")
-                        if (text.isNotEmpty() && text != lastPartial) {
-                            lastPartial = text
-                            Log.d(TAG, "Vosk partial changed: '$text'")
-                            callback?.onPartialResult(text)
-                        }
-                    }
-                } catch (ce: CancellationException) {
-                    Log.i(TAG, "Recognition loop cancelled at iter=$iterations")
-                    break
+        while (sessionListening && sessionGeneration == gen && isActive) {
+            try {
+                iterations++
+                val read = try {
+                    recorder.read(buffer, 0, buffer.size)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in recognition loop at iter=$iterations", e)
-                    callback?.onError("Recognition loop error: ${e.message}")
-                    break
+                    Log.e(TAG, "AudioRecord read threw exception at iter=$iterations", e)
+                    consecutiveReadErrors++
+                    if (consecutiveReadErrors >= maxConsecutiveReadErrors) {
+                        dispatchCallback(gen) { callback.onError("AudioRecord read failed repeatedly") }
+                        break
+                    }
+                    delay(50)
+                    continue
                 }
+
+                if (read < 0) {
+                    consecutiveReadErrors++
+                    consecutiveZeroReads = 0
+                    Log.e(TAG, "AudioRecord read error: $read (consecutive=$consecutiveReadErrors)")
+                    if (consecutiveReadErrors >= maxConsecutiveReadErrors) {
+                        dispatchCallback(gen) { callback.onError("AudioRecord read failed repeatedly") }
+                        break
+                    }
+                    delay(50)
+                    continue
+                }
+
+                if (read == 0) {
+                    consecutiveZeroReads++
+                    consecutiveReadErrors = 0
+                    if (consecutiveZeroReads >= maxConsecutiveZeroReads) {
+                        Log.e(TAG, "Repeated zero-byte reads, stopping recognition loop")
+                        break
+                    }
+                    delay(50)
+                    continue
+                }
+
+                consecutiveReadErrors = 0
+                consecutiveZeroReads = 0
+
+                if (iterations % 25 == 0L) {
+                    val level = audioLevel(buffer, read)
+                    Log.d(TAG, "gen=$gen iter=$iterations audioLevel=$level read=$read")
+                }
+
+                val isEndpoint = recognizer.acceptWaveForm(buffer, read)
+
+                if (isEndpoint) {
+                    val resultJson = recognizer.result
+                    val text = extractText(resultJson)
+                    val confidence = extractConfidence(resultJson)
+                    Log.i(TAG, "gen=$gen FINAL result: '$text' confidence=$confidence iter=$iterations")
+                    dispatchCallback(gen) { callback.onResult(text, confidence) }
+                    lastPartial = ""
+                } else {
+                    val partialJson = recognizer.partialResult
+                    val text = extractPartialText(partialJson)
+                    if (text.isNotEmpty() && text != lastPartial) {
+                        lastPartial = text
+                        dispatchCallback(gen) { callback.onPartialResult(text) }
+                    }
+                }
+            } catch (ce: CancellationException) {
+                Log.i(TAG, "Recognition loop cancelled gen=$gen at iter=$iterations")
+                break
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in recognition loop gen=$gen at iter=$iterations", e)
+                dispatchCallback(gen) { callback.onError("Recognition loop error: ${e.message}") }
+                break
             }
         }
 
-        isListening = false
-        stopAudioRecord()
-        Log.i(TAG, "Recognition loop ended after $iterations iterations")
+        Log.i(TAG, "Recognition loop ended gen=$gen after $iterations iterations")
     }
 
-    private fun stopAudioRecord() {
-        try {
-            audioRecord?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error stopping AudioRecord", e)
+    private fun dispatchCallback(gen: Long, action: () -> Unit) {
+        recognizerScope.launch(Dispatchers.Main) {
+            if (sessionGeneration == gen) {
+                action()
+            } else {
+                Log.w(TAG, "Ignoring callback from stale session gen=$gen, current=$sessionGeneration")
+            }
         }
-        try {
-            audioRecord?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "Error releasing AudioRecord", e)
-        }
-        audioRecord = null
     }
 
-    /**
-     * Rough audio energy level (RMS) for diagnostics. 0 = silence, higher = louder.
-     */
     private fun audioLevel(buffer: ShortArray, length: Int): Double {
         if (length <= 0) return 0.0
         var sum = 0.0
@@ -305,13 +325,6 @@ class VoskSpeechRecognizer(
         }
     }
 
-    /**
-     * Extract the minimum word confidence from a Vosk final result.
-     *
-     * With `setWords(true)`, the result JSON contains a "result" array where
-     * each word object has a "conf" field. We use the minimum confidence as a
-     * conservative phrase-confidence estimate.
-     */
     private fun extractConfidence(hypothesis: String?): Float {
         return try {
             val json = JSONObject(hypothesis ?: "{}")
@@ -323,9 +336,7 @@ class VoskSpeechRecognizer(
                 val conf = wordObj.optDouble("conf", -1.0).toFloat()
                 if (conf >= 0f) {
                     hasWord = true
-                    if (conf < minConfidence) {
-                        minConfidence = conf
-                    }
+                    if (conf < minConfidence) minConfidence = conf
                 }
             }
             if (hasWord) minConfidence else 0f
