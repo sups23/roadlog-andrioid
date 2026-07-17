@@ -113,6 +113,7 @@ class RouteMapDialogFragment : DialogFragment() {
             val btn = Button(requireContext()).apply {
                 text = paramLabels[i]
                 textSize = 11f
+                setTextColor(Color.WHITE)
                 setPadding(8, 4, 8, 4)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -126,6 +127,7 @@ class RouteMapDialogFragment : DialogFragment() {
         val noneBtn = Button(requireContext()).apply {
             text = "None"
             textSize = 11f
+            setTextColor(Color.WHITE)
             setPadding(8, 4, 8, 4)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -134,6 +136,9 @@ class RouteMapDialogFragment : DialogFragment() {
             setOnClickListener { selectParameter("") }
         }
         row2.addView(noneBtn)
+
+        paramBar.addView(row1)
+        paramBar.addView(row2)
 
         val bottomBar = FrameLayout(requireContext()).apply {
             setBackgroundColor(Color.argb(180, 0, 0, 0))
