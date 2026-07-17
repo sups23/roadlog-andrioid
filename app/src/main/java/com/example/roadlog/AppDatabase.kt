@@ -9,7 +9,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * Room database for persistent trip backup and history viewing.
  */
 
-@Entity(tableName = "trip_data")
+@Entity(
+    tableName = "trip_data",
+    indices = [Index(value = ["tripId"])]
+)
 data class TripData(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val tripId: Long = 0,
