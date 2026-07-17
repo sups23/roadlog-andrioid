@@ -161,6 +161,8 @@ class VoskSpeechRecognizer(
                 sessionJob = recognizerScope.launch {
                     runRecognitionLoop(gen, localRecorder, localRecognizer, localCallback, readBufferSize)
                 }
+            } finally {
+                lifecycleMutex.unlock()
             }
         }
     }
