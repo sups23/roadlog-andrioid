@@ -2,35 +2,68 @@
 
 ## Project
 
-- Single-module Android app: `:app`; all production Kotlin is under `app/src/main/java/com/example/roadlog/`.
-- `MainActivity` owns the UI, map, permissions, and CameraX capture; `LoggerService` owns foreground recording, GPS/sensors, Vosk, and Room persistence.
-- UI/service communication uses broadcasts and action/extra constants defined in `LoggerService`; receivers are registered as `RECEIVER_NOT_EXPORTED`.
-- Recording data is buffered in memory and flushed to Room in periodic batches (every 5 seconds). `LoggerService` creates a draft `Trip` at start, writes rows incrementally, then finalizes the trip in a Room transaction on stop. Only completed trips appear in history.
-- `AppDatabase.kt` is Room schema version 6 with explicit migrations `1 -> 2 -> 3 -> 4 -> 5 -> 6`; schema changes require a migration and version update.
-- `TripHistoryActivity` and `TripDetailActivity` read Room data for trip summaries, route/timeline views, charts, and photos. Map tiles are cached under the app-private files directory.
+- Single-module Android application: `:app`, package `com.example.roadlog`.
+- Toolchain: Gradle 8.9, AGP 8.5.2, Kotlin 1.9.22, `compileSdk 34`, `minSdk 26`, and `targetSdk 29`.
+- Production Kotlin is under `app/src/main/java/com/example/roadlog/` and uses XML layouts with view binding.
+- `MainActivity` owns permissions, trip controls, osmdroid maps, CameraX capture, and service broadcast receivers.
+- `LoggerService` is a non-exported foreground service for GPS, accelerometer, gyroscope, rotation sensors, Vosk recognition, and Room persistence.
+- `TripHistoryActivity` lists completed trips and supports swipe deletion. `TripDetailActivity` renders route, timeline, cause breakdown, sensor charts, and photos.
+- Debug builds register `DebugInitProvider` and may seed demo trips through `DebugSeeder`; production code must not depend on debug data.
+
+## Recording Flow
+
+- Fine location and microphone permissions are required to record. Camera permission is optional and is requested only when photos are enabled.
+- Service actions, extras, and broadcast names are defined in `LoggerService.Companion`.
+- The service prepares the bundled Vosk model asynchronously, buffers GPS and sensor data, and matches speech using `app/src/main/assets/cause_config.json`.
+- A draft `Trip` with status `RECORDING` is created at start. Rows are flushed to Room in chunks of 500. On stop, `finalizeTrip()` writes summary fields and marks the trip `COMPLETED`; only completed trips appear in history.
+- `LoggerService.onDestroy()` intentionally does not cancel `serviceScope`, allowing an asynchronous final Room flush to finish.
+
+## Persistence
+
+- `AppDatabase.kt` defines `TripData`, `Trip`, and `TripPhoto` and uses Room schema version 6.
+- Explicit migrations cover `1 -> 2 -> 3 -> 4 -> 5 -> 6`.
+- Room schema exports are under `app/schemas/`; schema changes require a migration and version increment.
+- `TripDao.deleteTripCascade()` removes photos, sensor rows, and the trip transactionally.
+- Never delete or replace `app/src/main/assets/model-en-us/`; it is required for Vosk model unpacking.
 
 ## Commands
 
-- Configure `local.properties` with `sdk.dir`; the repository-local SDK is `/workspace/android-sdk`.
-- Build: `./gradlew assembleDebug`
-- Lint: `./gradlew lintDebug`
-- Install on a connected device/emulator: `./gradlew installDebug`
-- Clean generated build output: `./gradlew clean`
-- Unit tests: `./gradlew testDebugUnitTest`
-- Instrumented tests (requires emulator/device): `./gradlew connectedDebugAndroidTest`
-- Single test class: `./gradlew testDebugUnitTest --tests "com.example.roadlog.FixtureSmokeTest"`
-- Single instrumented class: `./gradlew connectedDebugAndroidTest --tests "com.example.roadlog.DatabaseSmokeTest"`
-- Test fixtures are in `app/src/test/java/com/example/roadlog/TestFixtures.kt`; database fixtures are in `app/src/androidTest/java/com/example/roadlog/DatabaseFixtures.kt`.
-- If no emulator is connected, skip instrumented tests; do not claim they passed.
+Configure ignored `local.properties` with `sdk.dir` before building. This workspace may use `/workspace/android-sdk`.
 
-## Environment note
+```bash
+./gradlew assembleDebug
+./gradlew lintDebug
+./gradlew installDebug
+./gradlew clean
+./gradlew testDebugUnitTest
+./gradlew connectedDebugAndroidTest
+```
 
-- AAPT2 from AGP 8.5.2 is a 64-bit Linux x86_64 binary. On aarch64 hosts without qemu-user-static, resource processing fails with `AAPT2 ... Daemon startup failed`. The test foundation and fixtures are syntactically valid Kotlin but cannot be compiled end-to-end in this environment. Build on a standard x86_64 Android development host.
+Focused tests:
+
+```bash
+./gradlew testDebugUnitTest --tests "com.example.roadlog.FixtureSmokeTest"
+./gradlew connectedDebugAndroidTest --tests "com.example.roadlog.DatabaseSmokeTest"
+```
+
+Instrumentation requires a connected device or emulator. If none is available, skip it and report it as not run.
+
+## Test Locations
+
+- JVM fixtures and tests: `app/src/test/java/com/example/roadlog/`.
+- Room instrumentation tests: `app/src/androidTest/java/com/example/roadlog/`.
+- Tests should not require real GPS, microphone, camera, network access, or the bundled Vosk model unless explicitly marked as device/manual tests.
 
 ## Runtime Constraints
 
-- Never delete `app/src/main/assets/model-en-us/`; Vosk unpacks this bundled model into app storage on first run.
-- `app/src/main/assets/cause_config.json` is the source of truth for speech grammar, cause labels, variants, and matching thresholds; the UI and recognizer load it at runtime.
-- Recording requires fine location and microphone permissions; camera permission is additionally required for optional automatic/manual photos. Battery optimization should be disabled for reliable long trips.
-- Use `adb logcat -s RoadLog:D` for app/service diagnostics.
-- `LoggerService.onDestroy()` intentionally leaves its flush coroutine scope active so the asynchronous Room write can finish.
+- AAPT2 from AGP 8.5.2 is a 64-bit Linux x86_64 binary. On aarch64 hosts without compatible emulation, resource processing may fail; use a standard x86_64 Android development host.
+- Disable battery optimization for reliable long trips.
+- Map tiles are cached under the app-private files directory.
+- Use `adb logcat -s RoadLog:D` for diagnostics.
+
+## Working Tree Rules
+
+- Preserve unrelated user changes and never use destructive Git commands.
+- Do not stage `local.properties`, `.gradle/`, build outputs, `.idea/`, the local SDK, generated APK/AAB files, or crash logs.
+- Before declaring changes complete, inspect `git status --short`, run `git diff --check`, and review the complete diff.
+- Do not commit, amend, or force-push unless explicitly requested.

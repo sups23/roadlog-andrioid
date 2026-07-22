@@ -1,0 +1,292 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 6,
+    "identityHash": "48f848e8f8a2d65e7ee8947dcb625d66",
+    "entities": [
+      {
+        "tableName": "trip_data",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `latitude` REAL, `longitude` REAL, `speedKmh` REAL, `accelX` REAL, `accelY` REAL, `accelZ` REAL, `gyroX` REAL, `gyroY` REAL, `gyroZ` REAL, `rotX` REAL, `rotY` REAL, `rotZ` REAL, `rotW` REAL, `eventCause` TEXT, `rawTimestamp` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedKmh",
+            "columnName": "speedKmh",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelX",
+            "columnName": "accelX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelY",
+            "columnName": "accelY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelZ",
+            "columnName": "accelZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroX",
+            "columnName": "gyroX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroY",
+            "columnName": "gyroY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroZ",
+            "columnName": "gyroZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotX",
+            "columnName": "rotX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotY",
+            "columnName": "rotY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotZ",
+            "columnName": "rotZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotW",
+            "columnName": "rotW",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "eventCause",
+            "columnName": "eventCause",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rawTimestamp",
+            "columnName": "rawTimestamp",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_data_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_data_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "trips",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `startTimeMs` INTEGER NOT NULL, `endTimeMs` INTEGER NOT NULL, `startNanoTime` INTEGER NOT NULL, `endNanoTime` INTEGER NOT NULL, `distanceMeters` REAL NOT NULL, `eventCount` INTEGER NOT NULL, `gpsPointCount` INTEGER NOT NULL, `accelPointCount` INTEGER NOT NULL, `causeBreakdown` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `status` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startTimeMs",
+            "columnName": "startTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTimeMs",
+            "columnName": "endTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startNanoTime",
+            "columnName": "startNanoTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endNanoTime",
+            "columnName": "endNanoTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "distanceMeters",
+            "columnName": "distanceMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventCount",
+            "columnName": "eventCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsPointCount",
+            "columnName": "gpsPointCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accelPointCount",
+            "columnName": "accelPointCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "causeBreakdown",
+            "columnName": "causeBreakdown",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "trip_photos",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `latitude` REAL, `longitude` REAL, `filePath` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "filePath",
+            "columnName": "filePath",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_photos_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_photos_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          }
+        ],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '48f848e8f8a2d65e7ee8947dcb625d66')"
+    ]
+  }
+}
