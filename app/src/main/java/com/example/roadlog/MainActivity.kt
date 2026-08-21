@@ -43,7 +43,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
@@ -186,12 +185,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         // Configure osmdroid BEFORE setContentView/inflating MapView.
-        Configuration.getInstance().load(this, getSharedPreferences("osmdroid", MODE_PRIVATE))
-        Configuration.getInstance().userAgentValue = "RoadLog/1.0 (com.example.roadlog)"
-        Configuration.getInstance().osmdroidBasePath = filesDir
-        Configuration.getInstance().osmdroidTileCache = File(filesDir, "tiles")
-        Configuration.getInstance().osmdroidTileCache.mkdirs()
-        Configuration.getInstance().isDebugMapTileDownloader = true
+        MapTileConfiguration.initialize(this)
         Log.d(TAG, "osmdroid userAgent=${Configuration.getInstance().userAgentValue} cache=${Configuration.getInstance().osmdroidTileCache}")
 
         setContentView(R.layout.activity_main)
@@ -230,6 +224,7 @@ class MainActivity : AppCompatActivity() {
                 confidenceThreshold = 0.6f,
                 fuzzyThreshold = 0.85,
                 minWordLength = 3,
+                activationPhrases = listOf("log"),
                 causes = emptyList()
             )
         }
@@ -243,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         val marginPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 4f, displayMetrics).toInt()
         val columnCount = 3
 
-        causeConfig.causes.chunked(columnCount).forEach { rowCauses ->
+        causeConfig.causes.filterNot { it.voiceOnly }.chunked(columnCount).forEach { rowCauses ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -319,6 +314,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupMap()
+        MapTileConfiguration.configureAttributionView(findViewById(R.id.mapAttribution))
 
         updateUiState(isRecording = false)
         statusText.visibility = View.GONE
@@ -421,7 +417,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupMap() {
         mapView = findViewById(R.id.mapView)
-        mapView.setTileSource(TileSourceFactory.MAPNIK)
+        mapView.setTileSource(MapTileConfiguration.tileSource)
         mapView.setMultiTouchControls(true)
         mapView.setTilesScaledToDpi(true)
         mapView.setUseDataConnection(true)

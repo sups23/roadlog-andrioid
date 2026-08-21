@@ -27,6 +27,11 @@ object CauseConfigLoader {
             confidenceThreshold = root.optDouble("confidenceThreshold", 0.6).toFloat(),
             fuzzyThreshold = root.optDouble("fuzzyThreshold", 0.85),
             minWordLength = root.optInt("minWordLength", 3),
+            activationPhrases = parseStringArray(
+                root.optJSONArray("activationPhrases") ?: org.json.JSONArray().apply {
+                    put("log")
+                }
+            ),
             causes = causes
         )
     }
@@ -37,7 +42,8 @@ object CauseConfigLoader {
             displayName = obj.getString("displayName"),
             shortForm = obj.getString("shortForm"),
             phrases = parseStringArray(obj.getJSONArray("phrases")),
-            variants = parseStringArray(obj.optJSONArray("variants") ?: org.json.JSONArray())
+            variants = parseStringArray(obj.optJSONArray("variants") ?: org.json.JSONArray()),
+            voiceOnly = obj.optBoolean("voiceOnly", false)
         )
     }
 

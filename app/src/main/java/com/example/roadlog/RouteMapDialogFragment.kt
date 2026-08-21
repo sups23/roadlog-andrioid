@@ -13,12 +13,11 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.DialogFragment
 import kotlin.math.sqrt
-import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -58,10 +57,10 @@ class RouteMapDialogFragment : DialogFragment() {
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        Configuration.getInstance().load(requireContext(), requireContext().getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+        MapTileConfiguration.initialize(requireContext())
 
         mapView = MapView(requireContext()).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(MapTileConfiguration.tileSource)
             setMultiTouchControls(true)
             setTilesScaledToDpi(true)
             setUseDataConnection(true)
@@ -153,6 +152,22 @@ class RouteMapDialogFragment : DialogFragment() {
             setPadding(16, 16, 16, 32)
         }
 
+        val attribution = TextView(requireContext()).apply {
+            setBackgroundColor(Color.argb(180, 0, 0, 0))
+            setPadding(12, 8, 12, 8)
+            textSize = 11f
+            setTextColor(Color.WHITE)
+        }
+        MapTileConfiguration.configureAttributionView(attribution)
+        attribution.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            bottomMargin = 88
+            leftMargin = 8
+        }
+
         val backButton = Button(requireContext()).apply {
             text = "Back"
             setOnClickListener { dismiss() }
@@ -168,6 +183,7 @@ class RouteMapDialogFragment : DialogFragment() {
             addView(paramBar)
             addView(closeButton)
             addView(bottomBar)
+            addView(attribution)
         }
         return frame
     }

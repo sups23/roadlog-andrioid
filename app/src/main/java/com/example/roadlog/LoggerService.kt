@@ -244,6 +244,7 @@ class LoggerService : Service() {
                 confidenceThreshold = 0.6f,
                 fuzzyThreshold = 0.85,
                 minWordLength = 3,
+                activationPhrases = listOf("log"),
                 causes = emptyList()
             )
         }
@@ -664,8 +665,21 @@ class LoggerService : Service() {
                     return
                 }
 
+                val normalizedText = CauseConfig.normalizeSpeech(text)
+                val activation = causeConfig.findActivationPhrase(normalizedText)
+                if (activation == null) {
+                    Log.d(TAG, "Ignoring result without activation phrase: '$text'")
+                    return
+                }
+
+                val command = normalizedText.removePrefix(activation).trim()
+                if (command.isEmpty() || command == "[unk]") {
+                    Log.d(TAG, "Ignoring empty or unknown activated command: '$text'")
+                    return
+                }
+
                 // Try exact grammar phrase mapping first (fast and deterministic).
-                val exactCause = causeConfig.phraseToCauseMap[text.lowercase()]
+                val exactCause = causeConfig.phraseToCauseMap["$activation $command"]
                 if (exactCause != null) {
                     Log.i(TAG, "Exact phrase mapped to cause: $exactCause")
                     recordCauseEvent(exactCause)
@@ -673,7 +687,7 @@ class LoggerService : Service() {
                 }
 
                 // Fall back to fuzzy matching for partial/noise distortions.
-                val match = fuzzyMatcher.findBestMatch(text)
+                val match = fuzzyMatcher.findBestMatch(command)
                 if (match != null) {
                     Log.i(TAG, "Fuzzy matched cause: ${match.causeCode} (via '${match.matchedWord}', score=${match.score})")
                     recordCauseEvent(match.causeCode)

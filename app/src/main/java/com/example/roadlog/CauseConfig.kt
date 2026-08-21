@@ -10,6 +10,7 @@ data class CauseConfig(
     val confidenceThreshold: Float,
     val fuzzyThreshold: Double,
     val minWordLength: Int,
+    val activationPhrases: List<String>,
     val causes: List<CauseDefinition>
 ) {
 
@@ -24,7 +25,11 @@ data class CauseConfig(
      * All phrases Vosk should be allowed to recognize.
      */
     val allGrammarPhrases: List<String>
-        get() = causes.flatMap { it.phrases }
+        get() = activationPhrases.flatMap { activation ->
+            causes.flatMap { cause ->
+                cause.phrases.map { phrase -> "$activation $phrase" }
+            }
+        } + "[unk]"
 
     /**
      * Build a map from every phrase and variant to its cause code.
@@ -39,8 +44,26 @@ data class CauseConfig(
      */
     val phraseToCauseMap: Map<String, String>
         get() = causes.flatMap { cause ->
-            cause.phrases.map { phrase -> phrase to cause.code }
+            activationPhrases.flatMap { activation ->
+                cause.phrases.map { phrase -> "$activation $phrase" to cause.code }
+            }
         }.toMap()
+
+    fun findActivationPhrase(spoken: String): String? {
+        val normalized = normalizeSpeech(spoken)
+        return activationPhrases
+            .sortedByDescending { it.length }
+            .firstOrNull { normalized == it || normalized.startsWith("$it ") }
+    }
+
+    companion object {
+        fun normalizeSpeech(value: String): String {
+            return value.lowercase()
+                .replace(Regex("[^a-z0-9\\- ]"), " ")
+                .trim()
+                .replace(Regex("\\s+"), " ")
+        }
+    }
 }
 
 /**
@@ -58,5 +81,6 @@ data class CauseDefinition(
     val displayName: String,
     val shortForm: String,
     val phrases: List<String>,
-    val variants: List<String>
+    val variants: List<String>,
+    val voiceOnly: Boolean = false
 )

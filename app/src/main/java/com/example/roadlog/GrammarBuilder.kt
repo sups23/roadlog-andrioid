@@ -21,7 +21,7 @@ object GrammarBuilder {
      * Returns the grammar as a JSON array string suitable for Vosk's
      * [org.vosk.Recognizer](Model, float, String) constructor.
      *
-     * Example output: ["signal","traffic signal","bus",...]
+     * Example output: ["log signal","log traffic signal","[unk]"]
      */
     fun buildGrammarJson(config: CauseConfig): String {
         return JSONArray(config.allGrammarPhrases).toString()

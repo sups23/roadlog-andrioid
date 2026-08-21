@@ -62,8 +62,26 @@ Instrumentation tests require a connected device or emulator.
 - Keep `app/src/main/assets/model-en-us/`; it is the bundled Vosk model.
 - Speech causes, phrases, variants, and thresholds are defined in
   `app/src/main/assets/cause_config.json`.
+- Voice cause commands require the `log` activation phrase. For example,
+  say `log pothole` or `log unclassified`; unrelated speech, unmatched
+  words, and low-confidence results are ignored.
 - Disable battery optimization for reliable long recordings.
 - Diagnostics: `adb logcat -s RoadLog:D`.
+
+### OpenStreetMap Tiles
+
+RoadLog uses the official OSM Standard tile endpoint for interactive map viewing.
+The app sends a stable, contactable User-Agent identifying RoadLog and caches tiles
+using osmdroid's HTTP cache metadata and seven-day fallback. It does not prefetch,
+bulk download, or provide offline tile packs. Both map views display linked OSM
+attribution and a map-issue reporting link.
+
+Map traffic contact: `dynosups@gmail.com`. Project support page:
+`https://github.com/sups23/roadlog-andrioid`.
+
+Tile endpoint, policy flags, User-Agent, and attribution are centralized in
+`MapTileConfiguration.kt`. Map traffic is best-effort because OSM's volunteer-run
+tile servers have no availability guarantee.
 
 ## Project Layout
 

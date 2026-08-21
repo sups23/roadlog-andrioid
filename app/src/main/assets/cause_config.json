@@ -2,6 +2,9 @@
   "confidenceThreshold": 0.6,
   "fuzzyThreshold": 0.85,
   "minWordLength": 3,
+  "activationPhrases": [
+    "log"
+  ],
   "causes": [
     {
       "code": "SIGNAL",
@@ -10,7 +13,6 @@
       "phrases": [
         "signal",
         "traffic signal",
-        "light",
         "red light"
       ],
       "variants": [
@@ -28,7 +30,6 @@
       "shortForm": "QUEUE",
       "phrases": [
         "queue",
-        "line",
         "traffic jam",
         "congestion"
       ],
@@ -64,7 +65,7 @@
       "shortForm": "PED",
       "phrases": [
         "pedestrian",
-        "walking"
+        "pedestrian crossing"
       ],
       "variants": [
         "ped",
@@ -80,8 +81,7 @@
       "shortForm": "ROUGH",
       "phrases": [
         "roughness",
-        "rough road",
-        "bump"
+        "rough road"
       ],
       "variants": [
         "rough",
@@ -92,8 +92,7 @@
         "rufness",
         "rougnes",
         "roufnes",
-        "bamp",
-        "bum"
+        "bamp"
       ]
     },
     {
@@ -107,8 +106,6 @@
       "variants": [
         "potholes",
         "pot holes",
-        "hole",
-        "holes",
         "pothol",
         "pothawl"
       ]
@@ -125,8 +122,6 @@
         "speed breakers",
         "speedbump",
         "speed bumps",
-        "breaker",
-        "breakers",
         "speedbrake",
         "speed brake"
       ]
@@ -143,8 +138,7 @@
         "roadwork",
         "roadblock",
         "road block",
-        "construct",
-        "construc"
+        "construction zone"
       ]
     },
     {
@@ -153,7 +147,6 @@
       "shortForm": "FRICT",
       "phrases": [
         "friction",
-        "parking",
         "parked car",
         "side friction"
       ],
@@ -177,7 +170,6 @@
         "u turn"
       ],
       "variants": [
-        "turn",
         "turns",
         "u-turn",
         "tern",
@@ -194,7 +186,6 @@
       "phrases": [
         "market",
         "street vendor",
-        "stall",
         "vendors"
       ],
       "variants": [
@@ -207,6 +198,16 @@
         "vendr",
         "vendur"
       ]
+    },
+    {
+      "code": "UNCLASSIFIED",
+      "displayName": "Other",
+      "shortForm": "OTHER",
+      "phrases": [
+        "unclassified"
+      ],
+      "variants": [],
+      "voiceOnly": true
     }
   ]
 }

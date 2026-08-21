@@ -134,6 +134,17 @@
                 android:src="@android:drawable/ic_menu_mylocation"
                 app:backgroundTint="@color/teal_700"
                 app:fabSize="mini" />
+
+            <TextView
+                android:id="@+id/mapAttribution"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|start"
+                android:layout_margin="8dp"
+                android:background="#B0000000"
+                android:padding="6dp"
+                android:textSize="11sp"
+                android:textStyle="bold" />
         </FrameLayout>
 
     </LinearLayout>

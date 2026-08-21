@@ -34,10 +34,7 @@ class FuzzyCauseMatcher(private val config: CauseConfig) {
      *         fuzzy threshold.
      */
     fun findBestMatch(spoken: String): MatchResult? {
-        val cleaned = spoken.lowercase()
-            .replace(Regex("[^a-z0-9\\- ]"), " ")
-            .trim()
-            .replace(Regex("\\s+"), " ")
+        val cleaned = CauseConfig.normalizeSpeech(spoken)
 
         if (cleaned.isEmpty()) return null
 
@@ -54,23 +51,6 @@ class FuzzyCauseMatcher(private val config: CauseConfig) {
                 bestScore = score
                 bestCause = causeCode
                 bestWord = keyword
-            }
-        }
-
-        // Second pass: also check individual words so single-word commands and
-        // short phrases still match their best keyword.
-        val inputWords = cleaned.split(Regex("\\s+"))
-            .filter { it.isNotBlank() && it.length >= config.minWordLength }
-        if (inputWords.isNotEmpty()) {
-            for (inputWord in inputWords) {
-                for ((causeCode, keyword) in allKeywords) {
-                    val score = similarity(inputWord, keyword)
-                    if (score > bestScore) {
-                        bestScore = score
-                        bestCause = causeCode
-                        bestWord = keyword
-                    }
-                }
             }
         }
 
