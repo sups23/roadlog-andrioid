@@ -159,8 +159,8 @@ class FixtureSmokeTest {
     fun `demo trip definitions are non-empty`() {
         assertTrue(DebugSeeder.DEMO_TRIPS.isNotEmpty())
         DebugSeeder.DEMO_TRIPS.forEach { def ->
-            assertTrue(def.gpsCount > 0, "${def.label}: gpsCount")
-            assertTrue(def.durationMinutes > 0, "${def.label}: durationMinutes")
+            assertTrue("${def.label}: gpsCount", def.gpsCount > 0)
+            assertTrue("${def.label}: durationMinutes", def.durationMinutes > 0)
         }
     }
 }

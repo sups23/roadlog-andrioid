@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -17,6 +18,10 @@ class VoskSpeechRecognizer(
     private val context: Context,
     private val grammarJson: String? = null
 ) {
+
+    interface AudioFrameListener {
+        fun onAudioFrame(samples: ShortArray, length: Int, elapsedRealtimeNanos: Long)
+    }
 
     interface Callback {
         fun onReady()
@@ -39,6 +44,7 @@ class VoskSpeechRecognizer(
     private var sessionRecorder: AudioRecord? = null
     private var sessionRecognizer: Recognizer? = null
     private var sessionCallback: Callback? = null
+    private var sessionAudioFrameListener: AudioFrameListener? = null
     private var sessionJob: Job? = null
     @Volatile
     private var sessionListening = false
@@ -97,7 +103,7 @@ class VoskSpeechRecognizer(
         }
     }
 
-    fun startListening(callback: Callback) {
+    fun startListening(callback: Callback, audioFrameListener: AudioFrameListener? = null) {
         recognizerScope.launch {
             lifecycleMutex.lock()
             try {
@@ -110,6 +116,7 @@ class VoskSpeechRecognizer(
 
                 val gen = ++sessionGeneration
                 val rec = preparedRecognizer!!
+                rec.reset()
 
                 val minBufferSize = AudioRecord.getMinBufferSize(
                     sampleRate,
@@ -148,6 +155,7 @@ class VoskSpeechRecognizer(
                 sessionRecorder = recorder
                 sessionRecognizer = rec
                 sessionCallback = callback
+                sessionAudioFrameListener = audioFrameListener
                 sessionListening = true
 
                 val localRecorder = recorder
@@ -159,7 +167,14 @@ class VoskSpeechRecognizer(
                 callback.onReady()
 
                 sessionJob = recognizerScope.launch {
-                    runRecognitionLoop(gen, localRecorder, localRecognizer, localCallback, readBufferSize)
+                    runRecognitionLoop(
+                        gen,
+                        localRecorder,
+                        localRecognizer,
+                        localCallback,
+                        audioFrameListener,
+                        readBufferSize
+                    )
                 }
             } finally {
                 lifecycleMutex.unlock()
@@ -169,13 +184,18 @@ class VoskSpeechRecognizer(
 
     fun stop() {
         recognizerScope.launch {
-            lifecycleMutex.lock()
-            try {
-                stopSessionLocked()
-                sessionCallback = null
-            } finally {
-                lifecycleMutex.unlock()
-            }
+            stopAndWait()
+        }
+    }
+
+    suspend fun stopAndWait() {
+        lifecycleMutex.lock()
+        try {
+            stopSessionLocked()
+            sessionCallback = null
+            sessionAudioFrameListener = null
+        } finally {
+            lifecycleMutex.unlock()
         }
     }
 
@@ -187,6 +207,7 @@ class VoskSpeechRecognizer(
                 preparationGeneration++
                 stopSessionLocked()
                 sessionCallback = null
+                sessionAudioFrameListener = null
                 try { preparedRecognizer?.close() } catch (_: Exception) {}
                 preparedRecognizer = null
                 try { preparedModel?.close() } catch (_: Exception) {}
@@ -198,8 +219,9 @@ class VoskSpeechRecognizer(
         }
     }
 
-    private fun stopSessionLocked() {
+    private suspend fun stopSessionLocked() {
         sessionListening = false
+        sessionGeneration++
         val job = sessionJob
         val recorder = sessionRecorder
 
@@ -208,8 +230,10 @@ class VoskSpeechRecognizer(
         sessionJob = null
         sessionRecorder = null
         sessionRecognizer = null
+        sessionAudioFrameListener = null
 
         try { recorder?.release() } catch (_: Exception) {}
+        job?.join()
     }
 
     private suspend fun runRecognitionLoop(
@@ -217,6 +241,7 @@ class VoskSpeechRecognizer(
         recorder: AudioRecord,
         recognizer: Recognizer,
         callback: Callback,
+        audioFrameListener: AudioFrameListener?,
         bufferSize: Int
     ) {
         val buffer = ShortArray(bufferSize)
@@ -270,6 +295,18 @@ class VoskSpeechRecognizer(
 
                 consecutiveReadErrors = 0
                 consecutiveZeroReads = 0
+
+                try {
+                    audioFrameListener?.onAudioFrame(
+                        buffer.copyOf(read),
+                        read,
+                        SystemClock.elapsedRealtimeNanos()
+                    )
+                } catch (audioError: Exception) {
+                    Log.e(TAG, "Archival audio encoder rejected a frame", audioError)
+                    // Source-audio failure must not terminate GPS/sensor collection
+                    // or the speech recognition stream.
+                }
 
                 if (iterations % 25 == 0L) {
                     val level = audioLevel(buffer, read)

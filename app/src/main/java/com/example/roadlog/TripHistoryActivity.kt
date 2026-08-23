@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.TextView
+import android.widget.Button
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -17,10 +19,14 @@ class TripHistoryActivity : AppCompatActivity() {
 
     private lateinit var recyclerView: RecyclerView
     private lateinit var emptyText: TextView
+    private lateinit var exportAllButton: Button
+    private lateinit var reviewIncompleteButton: Button
     private lateinit var adapter: TripAdapter
     private lateinit var database: AppDatabase
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val exportRequestCode = 4101
+    private var exportIncludeIncomplete = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,15 +37,38 @@ class TripHistoryActivity : AppCompatActivity() {
 
         recyclerView = findViewById(R.id.tripsRecyclerView)
         emptyText = findViewById(R.id.emptyText)
+        exportAllButton = findViewById(R.id.exportAllButton)
+        reviewIncompleteButton = findViewById(R.id.reviewIncompleteButton)
         database = AppDatabase.getDatabase(this)
 
-        adapter = TripAdapter { trip ->
-            val intent = Intent(this, TripDetailActivity::class.java).apply {
-                putExtra(EXTRA_TRIP_ID, trip.id)
-                putExtra(EXTRA_TRIP_START, trip.startTimeMs)
-                putExtra(EXTRA_TRIP_END, trip.endTimeMs)
+        exportAllButton.setOnClickListener {
+            exportIncludeIncomplete = false
+            openExportDocument()
+        }
+        reviewIncompleteButton.setOnClickListener {
+            scope.launch {
+                val incomplete = withContext(Dispatchers.IO) { database.tripDao().getIncompleteTrips() }
+                if (incomplete.isEmpty()) {
+                    Toast.makeText(this@TripHistoryActivity, "No interrupted trips", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val labels = incomplete.map { trip ->
+                    "Trip ${trip.id} · ${trip.direction ?: "direction?"} · ${trip.observationPeriod ?: "period?"} · ${trip.interruptionReason ?: "incomplete"}"
+                }.toTypedArray()
+                AlertDialog.Builder(this@TripHistoryActivity)
+                    .setTitle("Interrupted trips preserved")
+                    .setItems(labels) { _, which -> openTrip(incomplete[which]) }
+                    .setPositiveButton("Export including them") { _, _ ->
+                        exportIncludeIncomplete = true
+                        openExportDocument()
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
             }
-            startActivity(intent)
+        }
+
+        adapter = TripAdapter { trip ->
+            openTrip(trip)
         }
 
         recyclerView.layoutManager = LinearLayoutManager(this)
@@ -48,9 +77,49 @@ class TripHistoryActivity : AppCompatActivity() {
         attachSwipeToDelete()
     }
 
+    private fun openExportDocument() {
+        startActivityForResult(
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_TITLE, "roadlog-research-export.zip")
+                addCategory(Intent.CATEGORY_OPENABLE)
+            },
+            exportRequestCode
+        )
+    }
+
     override fun onResume() {
         super.onResume()
         loadTrips()
+    }
+
+    @Deprecated("Use Activity Result APIs when this screen is modernized")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != exportRequestCode || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        exportAllButton.isEnabled = false
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    ResearchExporter.exportToUri(
+                        context = this@TripHistoryActivity,
+                        destination = uri,
+                        includeIncomplete = exportIncludeIncomplete
+                    )
+                }
+                Toast.makeText(
+                    this@TripHistoryActivity,
+                    "Exported ${result.tripCount} trips, ${result.eventCount} events, ${result.audioCount} audio segments",
+                    Toast.LENGTH_LONG
+                ).show()
+            } catch (e: Exception) {
+                Log.e("RoadLog", "Research export failed", e)
+                Toast.makeText(this@TripHistoryActivity, "Export failed; collected data was unchanged", Toast.LENGTH_LONG).show()
+            } finally {
+                exportAllButton.isEnabled = true
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -84,6 +153,16 @@ class TripHistoryActivity : AppCompatActivity() {
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.adapterPosition
                 val trip = adapter.getTripAt(position)
+
+                if (trip.qaStatus != TripQaStatus.UNREVIEWED) {
+                    Toast.makeText(
+                        this@TripHistoryActivity,
+                        "Reviewed research trips are retained; export before any controlled deletion.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    adapter.notifyItemChanged(position)
+                    return
+                }
 
                 AlertDialog.Builder(this@TripHistoryActivity)
                     .setTitle("Delete trip?")
@@ -119,6 +198,14 @@ class TripHistoryActivity : AppCompatActivity() {
             }
             loadTrips()
         }
+    }
+
+    private fun openTrip(trip: Trip) {
+        startActivity(Intent(this, TripDetailActivity::class.java).apply {
+            putExtra(EXTRA_TRIP_ID, trip.id)
+            putExtra(EXTRA_TRIP_START, trip.startTimeMs)
+            putExtra(EXTRA_TRIP_END, trip.endTimeMs)
+        })
     }
 
     companion object {

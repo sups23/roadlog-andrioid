@@ -20,18 +20,18 @@ class CauseMatchingTest {
                 variants = listOf("pothol")
             ),
             CauseDefinition(
-                code = "UNCLASSIFIED",
-                displayName = "Other",
-                shortForm = "OTHER",
+                code = "UNK",
+                displayName = "UNCLASSIFIED",
+                shortForm = "UNCLASSIFIED",
                 phrases = listOf("unclassified"),
                 variants = emptyList(),
-                voiceOnly = true
+                voiceOnly = false
             )
         )
     )
 
     @Test
-    fun `grammar requires activation and allows unknown speech`() {
+    fun `grammar requires activation and includes the recognizer fallback`() {
         val grammar = GrammarBuilder.buildGrammarJson(config)
 
         assertTrue(grammar.contains("log pothole"))
@@ -43,6 +43,7 @@ class CauseMatchingTest {
 
     @Test
     fun `explicit unclassified phrase maps to its own code`() {
-        assertEquals("UNCLASSIFIED", config.phraseToCauseMap["log unclassified"])
+        assertEquals("UNK", config.phraseToCauseMap["log unclassified"])
+        assertTrue(config.findByCode("UNK")?.voiceOnly == false)
     }
 }

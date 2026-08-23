@@ -20,11 +20,17 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
 
 class LoggerService : Service() {
 
@@ -42,12 +48,27 @@ class LoggerService : Service() {
         const val EXTRA_LAT = "lat"
         const val EXTRA_LON = "lon"
         const val EXTRA_SPEED = "speed"
+        const val EXTRA_ACCURACY = "accuracy"
         const val EXTRA_ENABLE_CAMERA = "enable_camera"
         const val ACTION_CAPTURE_PHOTO = "com.example.roadlog.CAPTURE_PHOTO"
         const val EXTRA_PHOTO_TIME = "photo_time"
+        const val EXTRA_REQUEST_ELAPSED_NANOS = "request_elapsed_realtime_nanos"
+        const val EXTRA_CAPTURE_ID = "capture_id"
+        const val EXTRA_EVENT_ID = "event_id"
         const val ACTION_TRIP_SAVED = "com.example.roadlog.TRIP_SAVED"
+        const val ACTION_RECORDING_STARTED = "com.example.roadlog.RECORDING_STARTED"
+        const val ACTION_QUERY_STATE = "com.example.roadlog.QUERY_STATE"
+        const val ACTION_STATE = "com.example.roadlog.RECORDING_STATE"
         const val EXTRA_TRIP_ID = "trip_id"
+        const val EXTRA_TRIP_UUID = "trip_uuid"
         const val EXTRA_START_TIME_MS = "start_time_ms"
+        const val EXTRA_DIRECTION = "direction"
+        const val EXTRA_OBSERVATION_PERIOD = "observation_period"
+        const val EXTRA_STUDY_DATE = "study_date"
+        const val EXTRA_RECORDING_STATE = "recording_state"
+        const val EXTRA_ACTIVE = "active"
+        const val EXTRA_TIME_ZONE_ID = "time_zone_id"
+        const val EXTRA_SENSOR_PROFILE_VERSION = "sensor_profile_version"
         const val NOTIFICATION_CHANNEL_ID = "roadlog_service_channel"
         const val NOTIFICATION_ID = 1
         const val TAG = "RoadLog"
@@ -56,7 +77,7 @@ class LoggerService : Service() {
     private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var locationManager: LocationManager
     private lateinit var sensorManager: SensorManager
-    private lateinit var accelerometer: Sensor
+    private var accelerometer: Sensor? = null
     private var gyroscope: Sensor? = null
     private var rotationSensor: Sensor? = null
     private lateinit var database: AppDatabase
@@ -64,6 +85,7 @@ class LoggerService : Service() {
     private lateinit var fuzzyMatcher: FuzzyCauseMatcher
 
     private var voskRecognizer: VoskSpeechRecognizer? = null
+    private var tripAudioRecorder: TripAudioRecorder? = null
 
     private val gpsBuffer = mutableListOf<GpsPoint>()
     private val accelBuffer = mutableListOf<AccelPoint>()
@@ -71,6 +93,9 @@ class LoggerService : Service() {
     private val rotationBuffer = mutableListOf<RotationPoint>()
     private val eventBuffer = mutableListOf<DelayEvent>()
     private val bufferLock = Any()
+    private val flushMutex = Mutex()
+    private val bufferOverflowReported = AtomicBoolean(false)
+    private val maxBufferedSamples = 20_000
 
     private var startTimeMs: Long = 0
     private var startNanoTime: Long = 0
@@ -83,13 +108,27 @@ class LoggerService : Service() {
     private val causeBreakdownMap = mutableMapOf<String, Int>()
     private var gpsLocked = false
     private var isListening = false
-    private var modelReady = false
-    private val pendingStartAfterModelReady = AtomicBoolean(false)
+    @Volatile private var modelReady = false
 
     private var captureEnabled = false
-    private var draftTripId: Long = -1
+    @Volatile private var draftTripId: Long = -1
     private val draftReady = AtomicBoolean(false)
-
+    private var draftTripUuid: String = ""
+    @Volatile private var lifecycleState = RecordingState.IDLE
+    @Volatile private var stopRequested = false
+    private var startJob: Job? = null
+    @Volatile private var writeFailureCount = 0
+    @Volatile private var droppedSampleCount = 0
+    private var lastWriteTimeMs = 0L
+    private var configuredDirection: String? = null
+    private var configuredObservationPeriod: String? = null
+    private var configuredDeviceId: String? = null
+    private var configuredStudyDate: String? = null
+    private val sensorProfileVersion = "1"
+    private var recoveryJob: Job? = null
+    private val audioPersistenceJobs = mutableListOf<Job>()
+    @Volatile private var gpsInterruptionDetected = false
+    @Volatile private var sensorInterruptionDetected = false
     private val handler = Handler(Looper.getMainLooper())
     private val isRunning = AtomicBoolean(false)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -97,18 +136,36 @@ class LoggerService : Service() {
 
     private val gpsCallback = object : LocationListener {
         override fun onLocationChanged(location: Location) {
-            gpsLocked = true
-            Log.i(TAG, "Location from ${location.provider}: ${location.latitude},${location.longitude} acc=${location.accuracy}")
+            gpsLocked = location.provider == LocationManager.GPS_PROVIDER
+            val callbackTimeMs = System.currentTimeMillis()
+            val sourceEpochTimeMs = location.time.takeIf { it > 0L }
+            val speedValid = location.hasSpeed()
             val point = GpsPoint(
-                timestampMs = System.currentTimeMillis(),
+                timestampMs = sourceEpochTimeMs ?: callbackTimeMs,
                 lat = location.latitude,
                 lon = location.longitude,
-                speedKmh = location.speed * 3.6f
+                speedKmh = if (speedValid) location.speed * 3.6f else null,
+                sourceElapsedRealtimeNanos = location.elapsedRealtimeNanos.takeIf { it > 0L },
+                sourceEpochTimeMs = sourceEpochTimeMs,
+                callbackTimeMs = callbackTimeMs,
+                provider = location.provider,
+                horizontalAccuracyMeters = location.accuracy,
+                speedValid = speedValid,
+                speedAccuracyMps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && location.hasSpeedAccuracy()) {
+                    location.speedAccuracyMetersPerSecond
+                } else {
+                    null
+                },
+                bearingDegrees = if (location.hasBearing()) location.bearing else null,
+                bearingAccuracyDegrees = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && location.hasBearingAccuracy()) {
+                    location.bearingAccuracyDegrees
+                } else {
+                    null
+                },
+                altitudeMeters = if (location.hasAltitude()) location.altitude else null
             )
-            synchronized(bufferLock) {
-                gpsBuffer.add(point)
-                gpsPointCount++
-            }
+            if (!appendBuffered(gpsBuffer, point)) return
+            synchronized(bufferLock) { gpsPointCount++ }
             val dist = lastGpsPoint?.let { prev ->
                 val results = FloatArray(1)
                 Location.distanceBetween(prev.lat, prev.lon, point.lat, point.lon, results)
@@ -122,6 +179,7 @@ class LoggerService : Service() {
         override fun onProviderDisabled(provider: String) {
             if (provider == LocationManager.GPS_PROVIDER) {
                 gpsLocked = false
+                gpsInterruptionDetected = true
             }
         }
 
@@ -134,16 +192,19 @@ class LoggerService : Service() {
             val x = event.values[0]
             val y = event.values[1]
             val z = event.values[2]
-            synchronized(bufferLock) {
-                accelBuffer.add(
-                    AccelPoint(
-                        timestampNano = System.nanoTime(),
-                        x = x,
-                        y = y,
-                        z = z
-                    )
-                )
-                accelPointCount++
+            val point = AccelPoint(
+                timestampNano = event.timestamp,
+                x = x,
+                y = y,
+                z = z,
+                callbackTimeMs = System.currentTimeMillis(),
+                accuracy = event.accuracy,
+                sensorType = event.sensor.type
+            )
+            if (appendBuffered(accelBuffer, point)) {
+                synchronized(bufferLock) {
+                    accelPointCount++
+                }
             }
         }
 
@@ -152,16 +213,18 @@ class LoggerService : Service() {
 
     private val gyroListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            synchronized(bufferLock) {
-                gyroBuffer.add(
-                    GyroPoint(
-                        timestampNano = System.nanoTime(),
-                        x = event.values[0],
-                        y = event.values[1],
-                        z = event.values[2]
-                    )
+            appendBuffered(
+                gyroBuffer,
+                GyroPoint(
+                    timestampNano = event.timestamp,
+                    x = event.values[0],
+                    y = event.values[1],
+                    z = event.values[2],
+                    callbackTimeMs = System.currentTimeMillis(),
+                    accuracy = event.accuracy,
+                    sensorType = event.sensor.type
                 )
-            }
+            )
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -173,17 +236,19 @@ class LoggerService : Service() {
             val y = event.values[1]
             val z = event.values[2]
             val w = if (event.values.size >= 4) event.values[3] else computeRotationScalar(x, y, z)
-            synchronized(bufferLock) {
-                rotationBuffer.add(
-                    RotationPoint(
-                        timestampNano = System.nanoTime(),
-                        x = x,
-                        y = y,
-                        z = z,
-                        w = w
-                    )
+            appendBuffered(
+                rotationBuffer,
+                RotationPoint(
+                    timestampNano = event.timestamp,
+                    x = x,
+                    y = y,
+                    z = z,
+                    w = w,
+                    callbackTimeMs = System.currentTimeMillis(),
+                    accuracy = event.accuracy,
+                    sensorType = event.sensor.type
                 )
-            }
+            )
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -194,13 +259,67 @@ class LoggerService : Service() {
         return if (sumSq < 1f) kotlin.math.sqrt(1f - sumSq) else 0f
     }
 
-    private fun requestPhotoCapture() {
+    private fun <T> appendBuffered(buffer: MutableList<T>, value: T): Boolean {
+        var overflowed = false
+        synchronized(bufferLock) {
+            val bufferedCount = gpsBuffer.size + accelBuffer.size + gyroBuffer.size +
+                rotationBuffer.size + eventBuffer.size
+            if (bufferedCount >= maxBufferedSamples) {
+                droppedSampleCount++
+                overflowed = true
+            } else {
+                buffer.add(value)
+            }
+        }
+        if (overflowed && bufferOverflowReported.compareAndSet(false, true)) {
+            handler.post {
+                broadcastStatus("Buffer limit reached; recording is stopping with dropped samples")
+                if (lifecycleState == RecordingState.RECORDING) stopRecording()
+            }
+        }
+        return !overflowed
+    }
+
+    private fun requestPhotoCapture(eventId: String?) {
+        val tripId = draftTripId
+        if (tripId < 0L) return
         val last = lastGpsPoint
-        sendBroadcast(Intent(ACTION_CAPTURE_PHOTO).apply {
-            putExtra(EXTRA_LAT, last?.lat ?: 0.0)
-            putExtra(EXTRA_LON, last?.lon ?: 0.0)
-            putExtra(EXTRA_PHOTO_TIME, System.currentTimeMillis())
-        })
+        val requestTimeMs = System.currentTimeMillis()
+        val requestElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+        val captureId = UUID.randomUUID().toString()
+        serviceScope.launch {
+            try {
+                database.tripDao().insertPhoto(
+                    TripPhoto(
+                        tripId = tripId,
+                        timestamp = requestTimeMs,
+                        latitude = last?.lat,
+                        longitude = last?.lon,
+                        filePath = "",
+                        captureId = captureId,
+                        eventId = eventId,
+                        requestTimeMs = requestTimeMs,
+                        requestElapsedRealtimeNanos = requestElapsedRealtimeNanos,
+                        mimeType = "image/jpeg",
+                        usabilityStatus = "PENDING",
+                        privacyStatus = "UNREVIEWED"
+                    )
+                )
+                sendAppBroadcast(Intent(ACTION_CAPTURE_PHOTO).apply {
+                    putExtra(EXTRA_TRIP_ID, tripId)
+                    putExtra(EXTRA_CAPTURE_ID, captureId)
+                    putExtra(EXTRA_EVENT_ID, eventId)
+                    putExtra(EXTRA_LAT, last?.lat ?: 0.0)
+                    putExtra(EXTRA_LON, last?.lon ?: 0.0)
+                    putExtra(EXTRA_PHOTO_TIME, requestTimeMs)
+                    putExtra(EXTRA_REQUEST_ELAPSED_NANOS, requestElapsedRealtimeNanos)
+                })
+            } catch (e: Exception) {
+                incrementWriteFailure()
+                Log.e(TAG, "Failed to create durable photo request", e)
+                broadcastStatus("Photo request could not be saved")
+            }
+        }
     }
 
     private val statusUpdateRunnable = object : Runnable {
@@ -230,12 +349,14 @@ class LoggerService : Service() {
 
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)!!
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
 
         database = AppDatabase.getDatabase(this)
+        configuredDeviceId = DeviceIdentity.get(this)
+        reconcilePendingAudio()
         causeConfig = try {
             CauseConfigLoader.load(this)
         } catch (e: Exception) {
@@ -250,23 +371,54 @@ class LoggerService : Service() {
         }
         fuzzyMatcher = FuzzyCauseMatcher(causeConfig)
 
-        recoverAbandonedDrafts()
+        recoveryJob = recoverAbandonedDrafts()
         prepareVoskModel()
     }
 
-    private fun recoverAbandonedDrafts() {
-        serviceScope.launch {
+    private fun recoverAbandonedDrafts(): Job {
+        return serviceScope.launch {
             try {
                 val abandoned = database.tripDao().getAbandonedTrips()
                 if (abandoned.isEmpty()) return@launch
-                Log.i(TAG, "Cleaning up ${abandoned.size} abandoned draft trips")
+                Log.i(TAG, "Preserving ${abandoned.size} interrupted draft trips")
                 for (trip in abandoned) {
-                    database.tripDao().deleteTripDataForTrip(trip.id)
-                    database.tripDao().deleteTrip(trip.id)
-                    Log.d(TAG, "Removed abandoned draft trip ${trip.id}")
+                    database.tripDao().markTripInterrupted(
+                        tripId = trip.id,
+                        status = TripStatus.RECOVERABLE,
+                        endTimeMs = System.currentTimeMillis(),
+                        endNanoTime = SystemClock.elapsedRealtimeNanos(),
+                        reason = "PROCESS_OR_SERVICE_INTERRUPTION",
+                        lastWriteTimeMs = trip.lastWriteTimeMs,
+                        writeFailureCount = trip.writeFailureCount,
+                        droppedSampleCount = trip.droppedSampleCount,
+                        gpsInterruption = trip.gpsInterruption,
+                        sensorInterruption = trip.sensorInterruption
+                    )
+                    Log.d(TAG, "Preserved interrupted trip ${trip.id}")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to clean up abandoned drafts", e)
+                Log.e(TAG, "Failed to preserve interrupted drafts", e)
+            }
+        }
+    }
+
+    private fun reconcilePendingAudio() {
+        serviceScope.launch {
+            try {
+                database.tripDao().getAllAudioForExport()
+                    .filter { it.status == TripAudioStatus.PENDING }
+                    .forEach { audio ->
+                        val file = File(audio.filePath)
+                        database.tripDao().insertAudio(
+                            audio.copy(
+                                status = if (file.isFile && file.length() > 0L) TripAudioStatus.INTERRUPTED else TripAudioStatus.FAILED,
+                                fileSizeBytes = file.length().takeIf { it > 0L },
+                                interruptionReason = "PROCESS_INTERRUPTION"
+                            )
+                        )
+                    }
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not reconcile pending audio segments", error)
             }
         }
     }
@@ -279,8 +431,8 @@ class LoggerService : Service() {
                 Log.i(TAG, "Vosk model ready")
                 modelReady = true
                 broadcastStatus("Vosk model ready. Waiting for START...")
-                if (pendingStartAfterModelReady.getAndSet(false)) {
-                    startRecording()
+                if (lifecycleState == RecordingState.RECORDING && !isListening) {
+                    startVoskListening()
                 }
             },
             onError = { error ->
@@ -292,19 +444,33 @@ class LoggerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand action=${intent?.action} modelReady=$modelReady isRunning=${isRunning.get()}")
+        Log.d(TAG, "onStartCommand action=${intent?.action} state=$lifecycleState modelReady=$modelReady")
         when (intent?.action) {
             ACTION_START -> {
                 captureEnabled = intent.getBooleanExtra(EXTRA_ENABLE_CAMERA, false)
-                if (modelReady) {
-                    startRecording()
+                configuredDirection = intent.getStringExtra(EXTRA_DIRECTION)
+                configuredObservationPeriod = intent.getStringExtra(EXTRA_OBSERVATION_PERIOD)
+                configuredStudyDate = intent.getStringExtra(EXTRA_STUDY_DATE)
+                    ?: ResearchClock.studyDateLocal(System.currentTimeMillis())
+                val validation = TripStartValidator.validate(
+                    TripStartConfiguration(
+                        direction = configuredDirection,
+                        observationPeriod = configuredObservationPeriod
+                    )
+                )
+                if (validation.isNotEmpty()) {
+                    broadcastStatus("Cannot start: ${validation.joinToString(", ")}")
                 } else {
-                    Log.i(TAG, "Model not ready yet, will start after preparation")
-                    pendingStartAfterModelReady.set(true)
-                    broadcastStatus("Loading Vosk model...")
+                    startRecording()
                 }
             }
             ACTION_STOP -> stopRecording()
+            ACTION_QUERY_STATE -> {
+                sendRecordingState()
+                if (lifecycleState == RecordingState.IDLE) {
+                    handler.post { stopSelf(startId) }
+                }
+            }
             ACTION_CAUSE_SELECTED -> {
                 val causeCode = intent.getStringExtra(EXTRA_CAUSE_CODE)
                 if (causeCode != null && isRunning.get()) {
@@ -312,26 +478,90 @@ class LoggerService : Service() {
                 }
             }
         }
+        sendRecordingState()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        if (isRunning.get()) {
-            stopRecording()
+        val wasActive = isRunning.get() || lifecycleState == RecordingState.PREPARING
+        if (wasActive) {
+            interruptForServiceDestroy()
+        } else {
+            voskRecognizer?.destroy()
         }
-        voskRecognizer?.destroy()
-        flushJob?.cancel()
+        super.onDestroy()
+        // Do not cancel serviceScope: a final Room transaction may still be in flight.
         // serviceScope is not canceled here so the background finalization coroutine can finish.
     }
 
-    private fun startRecording() {
-        if (isRunning.getAndSet(true)) return
+    private fun interruptForServiceDestroy() {
+        val tripId: Long
+        val interruptionTimeMs = System.currentTimeMillis()
+        val interruptionNanoTime = SystemClock.elapsedRealtimeNanos()
+        synchronized(this) {
+            stopRequested = true
+            if (lifecycleState == RecordingState.PREPARING) {
+                startJob?.cancel()
+            }
+            lifecycleState = RecordingState.FINALIZING
+            isRunning.set(false)
+            tripId = draftTripId
+        }
+        handler.removeCallbacks(statusUpdateRunnable)
+        handler.removeCallbacks(locationUpdateRunnable)
+        flushJob?.cancel()
+        flushJob = null
+        try { locationManager.removeUpdates(gpsCallback) } catch (_: Exception) {}
+        sensorManager.unregisterListener(accelListener)
+        sensorManager.unregisterListener(gyroListener)
+        sensorManager.unregisterListener(rotationListener)
+        voskRecognizer?.stop()
+        serviceScope.launch {
+            voskRecognizer?.stopAndWait()
+            tripAudioRecorder?.stop(interruptionTimeMs, interruptionNanoTime, "SERVICE_DESTROYED")
+            awaitAudioPersistence()
+            voskRecognizer?.destroy()
+            if (tripId >= 0L) {
+                repeat(3) { attempt ->
+                    if (!hasPendingBuffers()) return@repeat
+                    if (flushBuffersToDatabase()) return@repeat
+                    if (attempt < 2) delay((attempt + 1) * 500L)
+                }
+                try {
+                    database.tripDao().markTripInterrupted(
+                        tripId = tripId,
+                        status = TripStatus.RECOVERABLE,
+                        endTimeMs = interruptionTimeMs,
+                        endNanoTime = interruptionNanoTime,
+                        reason = "SERVICE_DESTROYED",
+                        lastWriteTimeMs = lastWriteTimeMs,
+                        coverageEndLatitude = lastGpsPoint?.lat,
+                        coverageEndLongitude = lastGpsPoint?.lon,
+                        gpsInterruption = gpsInterruptionDetected,
+                        sensorInterruption = sensorInterruptionDetected
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Could not preserve service-destroyed trip", e)
+                }
+            }
+            finishServiceWithoutCompletion()
+        }
+    }
 
-        Log.i(TAG, "startRecording() called")
+    private fun startRecording() {
+        synchronized(this) {
+            if (lifecycleState != RecordingState.IDLE) {
+                Log.w(TAG, "Ignoring START while state=$lifecycleState")
+                return
+            }
+            lifecycleState = RecordingState.PREPARING
+            stopRequested = false
+        }
+
+        Log.i(TAG, "startRecording() preparing durable draft")
 
         startTimeMs = System.currentTimeMillis()
-        startNanoTime = System.nanoTime()
+        startNanoTime = SystemClock.elapsedRealtimeNanos()
         eventCount = 0
         gpsPointCount = 0
         accelPointCount = 0
@@ -339,6 +569,16 @@ class LoggerService : Service() {
         lastGpsPoint = null
         endNanoTime = 0
         gpsLocked = false
+        writeFailureCount = 0
+        droppedSampleCount = 0
+        lastWriteTimeMs = 0L
+        bufferOverflowReported.set(false)
+        gpsInterruptionDetected = false
+        sensorInterruptionDetected = false
+        draftTripId = -1L
+        draftTripUuid = ""
+        draftReady.set(false)
+        tripAudioRecorder = null
 
         causeBreakdownMap.clear()
         synchronized(bufferLock) {
@@ -349,62 +589,180 @@ class LoggerService : Service() {
             eventBuffer.clear()
         }
 
-        wakeLock.acquire(60 * 60 * 1000L)
+        if (!wakeLock.isHeld) wakeLock.acquire(60 * 60 * 1000L)
         Log.i(TAG, "WakeLock acquired")
 
+        // Foreground promotion happens before model loading or database work.
         startForeground(NOTIFICATION_ID, buildNotification())
         Log.i(TAG, "Foreground service started")
 
-        serviceScope.launch {
-            draftTripId = createDraftTrip()
-            if (draftTripId < 0) {
-                Log.e(TAG, "Failed to create draft trip, recording may be lost")
-            } else {
+        startJob = serviceScope.launch {
+            try {
+                recoveryJob?.join()
+                val createdTripId = createDraftTrip()
+                draftTripId = createdTripId
                 draftReady.set(true)
+                persistSensorMetadata(createdTripId)
+                if (stopRequested) {
+                    database.tripDao().markTripInterrupted(
+                        tripId = createdTripId,
+                        status = TripStatus.ABORTED,
+                        endTimeMs = System.currentTimeMillis(),
+                        endNanoTime = SystemClock.elapsedRealtimeNanos(),
+                        reason = "STOP_DURING_PREPARATION",
+                        lastWriteTimeMs = System.currentTimeMillis()
+                    )
+                    finishServiceWithoutCompletion()
+                    return@launch
+                }
+
+                // The same AudioRecord feeds Vosk and the archival encoder. Do not
+                // announce an active trip until that shared source is available.
+                while (!modelReady && !stopRequested && isActive) {
+                    delay(250L)
+                }
+                check(modelReady || stopRequested) { "offline speech/audio model is not ready" }
+                if (stopRequested) {
+                    database.tripDao().markTripInterrupted(
+                        tripId = createdTripId,
+                        status = TripStatus.ABORTED,
+                        endTimeMs = System.currentTimeMillis(),
+                        endNanoTime = SystemClock.elapsedRealtimeNanos(),
+                        reason = "STOP_DURING_PREPARATION",
+                        lastWriteTimeMs = System.currentTimeMillis()
+                    )
+                    finishServiceWithoutCompletion()
+                    return@launch
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (stopRequested) return@withContext
+                    lifecycleState = RecordingState.RECORDING
+                    isRunning.set(true)
+                    startProducers()
+                    startPeriodicFlush()
+                    broadcastRecordingStarted()
+                    broadcastStatus("Recording started")
+                    handler.post(statusUpdateRunnable)
+                    handler.post(locationUpdateRunnable)
+                }
+                if (stopRequested && lifecycleState == RecordingState.PREPARING) {
+                    database.tripDao().markTripInterrupted(
+                        tripId = createdTripId,
+                        status = TripStatus.ABORTED,
+                        endTimeMs = System.currentTimeMillis(),
+                        endNanoTime = SystemClock.elapsedRealtimeNanos(),
+                        reason = "STOP_DURING_PREPARATION",
+                        lastWriteTimeMs = lastWriteTimeMs
+                    )
+                    finishServiceWithoutCompletion()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create durable recording draft", e)
+                if (draftTripId >= 0L) {
+                    try {
+                        database.tripDao().markTripInterrupted(
+                            tripId = draftTripId,
+                            status = TripStatus.RECOVERABLE,
+                            endTimeMs = System.currentTimeMillis(),
+                            endNanoTime = SystemClock.elapsedRealtimeNanos(),
+                            reason = "PREPARATION_FAILURE: ${e.message ?: "unknown"}",
+                            lastWriteTimeMs = lastWriteTimeMs
+                        )
+                    } catch (markError: Exception) {
+                        Log.e(TAG, "Could not mark preparation failure recoverable", markError)
+                    }
+                }
+                lifecycleState = RecordingState.FAILED
+                broadcastStatus("Recording could not be started: ${e.message ?: "database error"}")
+                finishServiceWithoutCompletion()
             }
         }
+    }
 
-        startPeriodicFlush()
-
-        try {
-            locationManager.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                1000L,
-                0f,
-                gpsCallback,
-                Looper.getMainLooper()
-            )
-            locationManager.requestLocationUpdates(
-                LocationManager.NETWORK_PROVIDER,
-                1000L,
-                0f,
-                gpsCallback,
-                Looper.getMainLooper()
-            )
-            Log.i(TAG, "Requested location updates from GPS and NETWORK providers")
-            Log.i(TAG, "GPS enabled=${locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)} NETWORK enabled=${locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)}")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Location permission missing", e)
-        } catch (e: IllegalArgumentException) {
-            Log.e(TAG, "Location provider not available", e)
+    private fun startProducers() {
+        var locationProviderRegistered = false
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { provider ->
+            try {
+                locationManager.requestLocationUpdates(
+                    provider,
+                    1000L,
+                    0f,
+                    gpsCallback,
+                    Looper.getMainLooper()
+                )
+                locationProviderRegistered = true
+            } catch (e: SecurityException) {
+                gpsInterruptionDetected = true
+                Log.e(TAG, "Location permission missing for $provider", e)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Location provider not available: $provider", e)
+            }
+        }
+        if (!locationProviderRegistered) {
+            gpsInterruptionDetected = true
+            broadcastStatus("No location provider registered")
         }
 
-        sensorManager.registerListener(accelListener, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+        accelerometer?.let { sensor ->
+            val registered = sensorManager.registerListener(accelListener, sensor, SensorManager.SENSOR_DELAY_GAME)
+            if (!registered) {
+                sensorInterruptionDetected = true
+                broadcastStatus("Accelerometer registration failed")
+            }
+            serviceScope.launch { database.tripDao().updateSensorRegistration(draftTripId, sensor.type, if (registered) "REGISTERED" else "REGISTRATION_FAILED") }
+        } ?: run {
+            sensorInterruptionDetected = true
+            broadcastStatus("Accelerometer unavailable")
+        }
         gyroscope?.let {
-            sensorManager.registerListener(gyroListener, it, SensorManager.SENSOR_DELAY_GAME)
+            val registered = sensorManager.registerListener(gyroListener, it, SensorManager.SENSOR_DELAY_GAME)
+            if (!registered) {
+                sensorInterruptionDetected = true
+                broadcastStatus("Gyroscope registration failed")
+            }
+            serviceScope.launch { database.tripDao().updateSensorRegistration(draftTripId, it.type, if (registered) "REGISTERED" else "REGISTRATION_FAILED") }
+        } ?: run {
+            sensorInterruptionDetected = true
+            Log.w(TAG, "Gyroscope unavailable")
         }
         rotationSensor?.let {
-            sensorManager.registerListener(rotationListener, it, SensorManager.SENSOR_DELAY_GAME)
+            val registered = sensorManager.registerListener(rotationListener, it, SensorManager.SENSOR_DELAY_GAME)
+            if (!registered) {
+                sensorInterruptionDetected = true
+                broadcastStatus("Orientation sensor registration failed")
+            }
+            serviceScope.launch { database.tripDao().updateSensorRegistration(draftTripId, it.type, if (registered) "REGISTERED" else "REGISTRATION_FAILED") }
+        } ?: run {
+            sensorInterruptionDetected = true
+            Log.w(TAG, "Orientation sensor unavailable")
         }
 
-        startVoskListening()
-
-        handler.post(statusUpdateRunnable)
-        handler.post(locationUpdateRunnable)
+        if (modelReady) {
+            startVoskListening()
+        } else {
+            broadcastStatus("Recording; speech model still preparing")
+        }
     }
 
     private fun stopRecording() {
-        if (!isRunning.getAndSet(false)) return
+        synchronized(this) {
+            when (lifecycleState) {
+                RecordingState.IDLE, RecordingState.FAILED, RecordingState.ABORTED -> return
+                RecordingState.PREPARING -> {
+                    stopRequested = true
+                    broadcastStatus("Stopping before recording started")
+                    return
+                }
+                RecordingState.FINALIZING -> return
+                RecordingState.RECORDING -> {
+                    lifecycleState = RecordingState.FINALIZING
+                    isRunning.set(false)
+                }
+            }
+        }
 
         Log.i(TAG, "stopRecording() called. GPS=${gpsPointCount}, Accel=${accelPointCount}, Events=${eventCount}")
 
@@ -431,28 +789,48 @@ class LoggerService : Service() {
         Log.i(TAG, "Vosk listener stopped")
 
         val endTimeMs = System.currentTimeMillis()
-        endNanoTime = System.nanoTime()
+        endNanoTime = SystemClock.elapsedRealtimeNanos()
+        val tripId = draftTripId
 
         serviceScope.launch {
             Log.i(TAG, "Starting final flush and finalization")
             try {
-                flushBuffersToDatabase()
-                finalizeTripAndBroadcast(endTimeMs, endNanoTime)
+                voskRecognizer?.stopAndWait()
+                tripAudioRecorder?.stop(endTimeMs, endNanoTime)
+                awaitAudioPersistence()
+                var flushed = false
+                repeat(3) { attempt ->
+                    if (flushed) return@repeat
+                    flushed = flushBuffersToDatabase()
+                    if (!flushed && attempt < 2) delay((attempt + 1) * 500L)
+                }
+                if (!flushed || hasPendingBuffers()) {
+                    error("Recording buffers were not durably written")
+                }
+                finalizeTripAndBroadcast(tripId, endTimeMs, endNanoTime)
             } catch (e: Exception) {
                 Log.e(TAG, "Room finalization failed", e)
-            }
-
-            withContext(Dispatchers.Main) {
-                draftTripId = -1
-                draftReady.set(false)
-                if (wakeLock.isHeld) {
-                    wakeLock.release()
-                    Log.i(TAG, "WakeLock released")
+                if (tripId >= 0L) {
+                    try {
+                        database.tripDao().markTripInterrupted(
+                            tripId = tripId,
+                            status = TripStatus.RECOVERABLE,
+                            endTimeMs = endTimeMs,
+                            endNanoTime = endNanoTime,
+                            reason = "FINALIZATION_FAILURE: ${e.message ?: "unknown"}",
+                            lastWriteTimeMs = lastWriteTimeMs,
+                            coverageEndLatitude = lastGpsPoint?.lat,
+                            coverageEndLongitude = lastGpsPoint?.lon,
+                            gpsInterruption = gpsInterruptionDetected,
+                            sensorInterruption = sensorInterruptionDetected
+                        )
+                    } catch (markError: Exception) {
+                        Log.e(TAG, "Could not mark failed trip recoverable", markError)
+                    }
                 }
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                Log.i(TAG, "Service stopped")
+                broadcastStatus("Trip preserved for recovery; finalization failed")
             }
+            finishServiceWithoutCompletion()
         }
     }
 
@@ -467,63 +845,124 @@ class LoggerService : Service() {
             gpsPointCount = 0,
             accelPointCount = 0,
             causeBreakdown = "{}",
-            createdAt = 0,
-            status = TripStatus.RECORDING
+            createdAt = startTimeMs,
+            status = TripStatus.RECORDING,
+            tripUuid = UUID.randomUUID().toString(),
+            sessionId = ResearchStudy.SESSION_ID,
+            corridorId = ResearchStudy.CORRIDOR_ID,
+            direction = configuredDirection,
+            observationPeriod = configuredObservationPeriod,
+            validityStatus = null,
+            qaStatus = TripQaStatus.UNREVIEWED,
+            codebookVersion = causeConfig.version,
+            appVersion = BuildConfig.VERSION_NAME,
+            schemaVersion = 7,
+            studyDateLocal = configuredStudyDate,
+            timeZoneId = ResearchTime.KATHMANDU_ZONE_ID,
+            sensorProfileVersion = sensorProfileVersion,
+            deviceId = configuredDeviceId,
+            lastWriteTimeMs = startTimeMs
         )
+        draftTripUuid = trip.tripUuid
         return database.tripDao().insertTrip(trip)
+    }
+
+    private suspend fun persistSensorMetadata(tripId: Long) {
+        val sensors = listOf(
+            sensorMetadata(tripId, accelerometer, Sensor.TYPE_ACCELEROMETER),
+            sensorMetadata(tripId, gyroscope, Sensor.TYPE_GYROSCOPE),
+            sensorMetadata(tripId, rotationSensor, rotationSensor?.type ?: Sensor.TYPE_GAME_ROTATION_VECTOR)
+        )
+        database.tripDao().upsertSensorMetadata(sensors)
+    }
+
+    private fun sensorMetadata(tripId: Long, sensor: Sensor?, sensorType: Int): SensorMetadata {
+        return SensorMetadata(
+            metadataId = "$tripId-$sensorType",
+            tripId = tripId,
+            sensorType = sensorType,
+            sensorName = sensor?.name,
+            vendor = sensor?.vendor,
+            version = sensor?.version?.toString(),
+            resolution = sensor?.resolution,
+            maximumRange = sensor?.maximumRange,
+            selectedProfile = "SENSOR_DELAY_GAME",
+            registrationResult = if (sensor == null) "UNAVAILABLE" else "AVAILABLE",
+            sensorProfileVersion = sensorProfileVersion,
+            requestedPeriodUs = 20_000
+        )
     }
 
     private fun startPeriodicFlush() {
         flushJob = serviceScope.launch {
             while (isActive) {
                 delay(5_000L)
-                flushBuffersToDatabase()
+                if (lifecycleState == RecordingState.RECORDING) {
+                    flushBuffersToDatabase()
+                }
             }
         }
     }
 
-    private suspend fun flushBuffersToDatabase() {
-        if (!draftReady.get() || draftTripId < 0) return
+    private suspend fun flushBuffersToDatabase(): Boolean = flushMutex.withLock {
+        if (!draftReady.get() || draftTripId < 0) return@withLock false
+        val tripId = draftTripId
         val gpsSnapshot: List<GpsPoint>
         val accelSnapshot: List<AccelPoint>
         val gyroSnapshot: List<GyroPoint>
         val rotSnapshot: List<RotationPoint>
         val eventSnapshot: List<DelayEvent>
         synchronized(bufferLock) {
-            gpsSnapshot = gpsBuffer.toList(); gpsBuffer.clear()
-            accelSnapshot = accelBuffer.toList(); accelBuffer.clear()
-            gyroSnapshot = gyroBuffer.toList(); gyroBuffer.clear()
-            rotSnapshot = rotationBuffer.toList(); rotationBuffer.clear()
-            eventSnapshot = eventBuffer.toList(); eventBuffer.clear()
+            // Do not acknowledge these rows until the Room transaction commits.
+            gpsSnapshot = gpsBuffer.toList()
+            accelSnapshot = accelBuffer.toList()
+            gyroSnapshot = gyroBuffer.toList()
+            rotSnapshot = rotationBuffer.toList()
+            eventSnapshot = eventBuffer.toList()
         }
 
         if (gpsSnapshot.isEmpty() && accelSnapshot.isEmpty() && gyroSnapshot.isEmpty() &&
-            rotSnapshot.isEmpty() && eventSnapshot.isEmpty()) return
+            rotSnapshot.isEmpty() && eventSnapshot.isEmpty()) return@withLock true
 
         val rows = mutableListOf<TripData>()
+        val events = mutableListOf<TripEvent>()
 
         gpsSnapshot.forEach { point ->
             rows.add(
                 TripData(
-                    tripId = draftTripId,
+                    tripId = tripId,
                     timestamp = point.timestampMs,
                     latitude = point.lat,
                     longitude = point.lon,
                     speedKmh = point.speedKmh,
-                    accelZ = null,
-                    eventCause = null
+                    eventCause = null,
+                    callbackTimeMs = point.callbackTimeMs,
+                    sourceElapsedRealtimeNanos = point.sourceElapsedRealtimeNanos,
+                    sourceEpochTimeMs = point.sourceEpochTimeMs,
+                    provider = point.provider,
+                    horizontalAccuracyMeters = point.horizontalAccuracyMeters,
+                    speedValid = point.speedValid,
+                    speedAccuracyMps = point.speedAccuracyMps,
+                    bearingDegrees = point.bearingDegrees,
+                    bearingAccuracyDegrees = point.bearingAccuracyDegrees,
+                    altitudeMeters = point.altitudeMeters,
+                    sourceType = "LOCATION"
                 )
             )
         }
 
-        accelSnapshot.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
+        fun sensorTimestampMs(timestampNano: Long): Long {
+            return TimestampCalibration.elapsedToWallTimeMs(
+                ClockAnchor(startTimeMs, startNanoTime),
+                timestampNano
             )
+        }
+
+        accelSnapshot.forEach { point ->
             rows.add(
                 TripData(
-                    tripId = draftTripId,
-                    timestamp = timestampMs,
+                    tripId = tripId,
+                    timestamp = sensorTimestampMs(point.timestampNano),
                     latitude = null,
                     longitude = null,
                     speedKmh = null,
@@ -531,19 +970,21 @@ class LoggerService : Service() {
                     accelY = point.y,
                     accelZ = point.z,
                     eventCause = null,
-                    rawTimestamp = point.timestampNano
+                    rawTimestamp = point.timestampNano,
+                    sourceTimestampNanos = point.timestampNano,
+                    callbackTimeMs = point.callbackTimeMs,
+                    sensorType = point.sensorType,
+                    sensorAccuracy = point.accuracy,
+                    sourceType = "ACCELEROMETER"
                 )
             )
         }
 
         gyroSnapshot.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
-            )
             rows.add(
                 TripData(
-                    tripId = draftTripId,
-                    timestamp = timestampMs,
+                    tripId = tripId,
+                    timestamp = sensorTimestampMs(point.timestampNano),
                     latitude = null,
                     longitude = null,
                     speedKmh = null,
@@ -551,19 +992,21 @@ class LoggerService : Service() {
                     gyroY = point.y,
                     gyroZ = point.z,
                     eventCause = null,
-                    rawTimestamp = point.timestampNano
+                    rawTimestamp = point.timestampNano,
+                    sourceTimestampNanos = point.timestampNano,
+                    callbackTimeMs = point.callbackTimeMs,
+                    sensorType = point.sensorType,
+                    sensorAccuracy = point.accuracy,
+                    sourceType = "GYROSCOPE"
                 )
             )
         }
 
         rotSnapshot.forEach { point ->
-            val timestampMs = startTimeMs + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                point.timestampNano - startNanoTime
-            )
             rows.add(
                 TripData(
-                    tripId = draftTripId,
-                    timestamp = timestampMs,
+                    tripId = tripId,
+                    timestamp = sensorTimestampMs(point.timestampNano),
                     latitude = null,
                     longitude = null,
                     speedKmh = null,
@@ -572,7 +1015,12 @@ class LoggerService : Service() {
                     rotZ = point.z,
                     rotW = point.w,
                     eventCause = null,
-                    rawTimestamp = point.timestampNano
+                    rawTimestamp = point.timestampNano,
+                    sourceTimestampNanos = point.timestampNano,
+                    callbackTimeMs = point.callbackTimeMs,
+                    sensorType = point.sensorType,
+                    sensorAccuracy = point.accuracy,
+                    sourceType = "ROTATION"
                 )
             )
         }
@@ -580,26 +1028,101 @@ class LoggerService : Service() {
         eventSnapshot.forEach { event ->
             rows.add(
                 TripData(
-                    tripId = draftTripId,
+                    tripId = tripId,
                     timestamp = event.timestamp,
-                    latitude = null,
-                    longitude = null,
-                    speedKmh = null,
-                    accelZ = null,
-                    eventCause = event.causeCode
+                    latitude = event.latitude,
+                    longitude = event.longitude,
+                    speedKmh = event.speedKmh,
+                    eventCause = event.causeCode,
+                    sourceElapsedRealtimeNanos = event.elapsedRealtimeNanos,
+                    sourceType = "EVENT"
+                )
+            )
+            events.add(
+                TripEvent(
+                    eventId = event.eventId,
+                    tripId = tripId,
+                    markerTimeMs = event.timestamp,
+                    markerElapsedRealtimeNanos = event.elapsedRealtimeNanos,
+                    experiencedLatitude = event.latitude,
+                    experiencedLongitude = event.longitude,
+                    sourceLatitude = null,
+                    sourceLongitude = null,
+                    sourceLocationVisible = false,
+                    locationAccuracyMeters = event.locationAccuracyMeters,
+                    locationProvider = event.locationProvider,
+                    locationFixTimeMs = event.locationFixTimeMs,
+                    locationFixElapsedRealtimeNanos = event.locationFixElapsedRealtimeNanos,
+                    locationFixAgeMs = event.locationFixTimeMs?.let { event.timestamp - it },
+                    speedValid = event.speedValid,
+                    speedKmh = event.speedKmh,
+                    primaryCauseCode = event.causeCode,
+                    provenance = event.provenance,
+                    transcript = event.transcript,
+                    recognitionConfidence = event.recognitionConfidence,
+                    codebookVersion = causeConfig.version
                 )
             )
         }
 
-        rows.chunked(500).forEach { chunk ->
-            database.tripDao().insertAll(chunk)
+        try {
+            database.tripDao().insertBatch(rows, events)
+            synchronized(bufferLock) {
+                gpsBuffer.removePrefix(gpsSnapshot.size)
+                accelBuffer.removePrefix(accelSnapshot.size)
+                gyroBuffer.removePrefix(gyroSnapshot.size)
+                rotationBuffer.removePrefix(rotSnapshot.size)
+                eventBuffer.removePrefix(eventSnapshot.size)
+            }
+            lastWriteTimeMs = System.currentTimeMillis()
+            try {
+                database.tripDao().updateTripHealth(
+                    tripId = tripId,
+                    lastWriteTimeMs = lastWriteTimeMs,
+                    writeFailureCount = writeFailureCount,
+                    droppedSampleCount = droppedSampleCount
+                )
+            } catch (healthError: Exception) {
+                Log.e(TAG, "Batch committed but health heartbeat could not be updated", healthError)
+            }
+            Log.d(TAG, "Flushed ${rows.size} rows to draft trip $tripId")
+            true
+        } catch (e: Exception) {
+            incrementWriteFailure()
+            Log.e(TAG, "Room batch write failed; retaining ${rows.size} rows for retry", e)
+            try {
+                database.tripDao().updateTripHealth(
+                    tripId = tripId,
+                    lastWriteTimeMs = lastWriteTimeMs,
+                    writeFailureCount = writeFailureCount,
+                    droppedSampleCount = droppedSampleCount
+                )
+            } catch (healthError: Exception) {
+                Log.e(TAG, "Could not persist write failure count", healthError)
+            }
+            broadcastStatus("Storage write failed; samples retained for retry")
+            false
         }
-
-        Log.d(TAG, "Flushed ${rows.size} rows to draft trip $draftTripId")
     }
 
-    private suspend fun finalizeTripAndBroadcast(endTimeMs: Long, endNanoTime: Long) {
-        if (draftTripId < 0) return
+    private fun <T> MutableList<T>.removePrefix(count: Int) {
+        if (count <= 0) return
+        subList(0, minOf(count, size)).clear()
+    }
+
+    private fun incrementWriteFailure() {
+        synchronized(this) {
+            writeFailureCount++
+        }
+    }
+
+    private fun hasPendingBuffers(): Boolean = synchronized(bufferLock) {
+        gpsBuffer.isNotEmpty() || accelBuffer.isNotEmpty() || gyroBuffer.isNotEmpty() ||
+            rotationBuffer.isNotEmpty() || eventBuffer.isNotEmpty()
+    }
+
+    private suspend fun finalizeTripAndBroadcast(tripId: Long, endTimeMs: Long, endNanoTime: Long) {
+        if (tripId < 0) return
 
         val breakdown = JSONObject().apply {
             synchronized(bufferLock) {
@@ -607,8 +1130,9 @@ class LoggerService : Service() {
             }
         }.toString()
 
+        persistTripQuality(tripId, endTimeMs)
         database.tripDao().finalizeTrip(
-            tripId = draftTripId,
+            tripId = tripId,
             endTimeMs = endTimeMs,
             endNanoTime = endNanoTime,
             distanceMeters = totalDistanceMeters,
@@ -619,12 +1143,140 @@ class LoggerService : Service() {
             createdAt = System.currentTimeMillis()
         )
 
-        Log.i(TAG, "Finalized trip id=$draftTripId distance=${"%.1f".format(totalDistanceMeters)}m events=$eventCount gps=$gpsPointCount accel=$accelPointCount")
+        Log.i(TAG, "Finalized trip id=$tripId distance=${"%.1f".format(totalDistanceMeters)}m events=$eventCount gps=$gpsPointCount accel=$accelPointCount")
 
-        sendBroadcast(Intent(ACTION_TRIP_SAVED).apply {
-            putExtra(EXTRA_TRIP_ID, draftTripId)
+        sendAppBroadcast(Intent(ACTION_TRIP_SAVED).apply {
+            putExtra(EXTRA_TRIP_ID, tripId)
+            putExtra(EXTRA_TRIP_UUID, draftTripUuid)
             putExtra(EXTRA_START_TIME_MS, startTimeMs)
         })
+    }
+
+    private suspend fun persistTripQuality(tripId: Long, endTimeMs: Long) {
+        val gps = database.tripDao().getGpsForTrip(tripId, startTimeMs, endTimeMs)
+        val accel = database.tripDao().getAccelForTrip(tripId, startTimeMs, endTimeMs)
+        val gyro = database.tripDao().getGyroForTrip(tripId, startTimeMs, endTimeMs)
+        val rotation = database.tripDao().getRotationForTrip(tripId, startTimeMs, endTimeMs)
+        val manualEventMarkerCount = database.tripDao().countManualEventsForTrip(tripId)
+        val photoCount = database.tripDao().countPhotosForTrip(tripId)
+        val audioSegmentCount = database.tripDao().countAudioForTrip(tripId)
+        if (gps.isEmpty()) gpsInterruptionDetected = true
+        if (accel.isEmpty() || gyro.isEmpty() || rotation.isEmpty()) sensorInterruptionDetected = true
+        val gpsStream = QualityMetrics.stream(gps.map { it.timestamp }, startTimeMs, endTimeMs, expectedFrequencyHz = 1.0)
+        val accelStream = QualityMetrics.stream(accel.map { it.timestamp }, startTimeMs, endTimeMs, expectedFrequencyHz = 50.0)
+        val gyroStream = QualityMetrics.stream(gyro.map { it.timestamp }, startTimeMs, endTimeMs, expectedFrequencyHz = 50.0)
+        val rotationStream = QualityMetrics.stream(rotation.map { it.timestamp }, startTimeMs, endTimeMs, expectedFrequencyHz = 50.0)
+        val gpsQuality = QualityMetrics.gps(gps)
+        val warnings = JSONArray().apply {
+            if (writeFailureCount > 0) put("$writeFailureCount storage write failure(s)")
+            if (droppedSampleCount > 0) put("$droppedSampleCount samples dropped after buffer limit")
+            if (gps.isEmpty()) put("no GPS samples")
+            if (accel.isEmpty()) put("no accelerometer samples")
+            if (gyro.isEmpty()) put("no gyroscope samples")
+            if (rotation.isEmpty()) put("no orientation samples")
+            if (gpsInterruptionDetected) put("GPS stream interruption or unavailable provider")
+            if (sensorInterruptionDetected) put("one or more sensor streams interrupted or unavailable")
+        }
+        database.tripDao().upsertTripQuality(
+            TripQuality(
+                tripId = tripId,
+                gpsSampleCount = gps.size,
+                gpsAvailabilityPercent = gpsStream.observedCoveragePercent,
+                medianGpsAccuracyMeters = gpsQuality.medianAccuracyMeters,
+                accelSampleCount = accel.size,
+                accelEffectiveHz = accelStream.effectiveFrequencyHz,
+                gyroSampleCount = gyro.size,
+                gyroEffectiveHz = gyroStream.effectiveFrequencyHz,
+                rotationSampleCount = rotation.size,
+                rotationEffectiveHz = rotationStream.effectiveFrequencyHz,
+                medianIntervalMs = gpsStream.medianIntervalMs,
+                p05IntervalMs = gpsStream.p05IntervalMs,
+                p95IntervalMs = gpsStream.p95IntervalMs,
+                longestGapMs = listOfNotNull(
+                    gpsStream.longestGapMs,
+                    accelStream.longestGapMs,
+                    gyroStream.longestGapMs,
+                    rotationStream.longestGapMs
+                ).maxOrNull(),
+                accelMedianIntervalMs = accelStream.medianIntervalMs,
+                accelLongestGapMs = accelStream.longestGapMs,
+                gyroMedianIntervalMs = gyroStream.medianIntervalMs,
+                gyroLongestGapMs = gyroStream.longestGapMs,
+                rotationMedianIntervalMs = rotationStream.medianIntervalMs,
+                rotationLongestGapMs = rotationStream.longestGapMs,
+                gpsLongestGapMs = gpsStream.longestGapMs,
+                timeToFirstGpsFixMs = gps.firstOrNull()?.timestamp?.minus(startTimeMs),
+                manualEventMarkerCount = manualEventMarkerCount,
+                photoCount = photoCount,
+                audioSegmentCount = audioSegmentCount,
+                gpsProviderJson = JSONObject().apply {
+                    gpsQuality.providerCounts.forEach { (provider, count) -> put(provider, count) }
+                }.toString(),
+                gpsBelowFivePercent = gpsQuality.belowFiveMetersPercent,
+                gpsBelowTenPercent = gpsQuality.belowTenMetersPercent,
+                gpsAbovePoorQualityPercent = gpsQuality.abovePoorQualityPercent,
+                invalidSpeedCount = gpsQuality.invalidSpeedCount,
+                unavailableSpeedCount = gpsQuality.unavailableSpeedCount,
+                duplicateTimestampCount = gpsStream.duplicateTimestampCount + accelStream.duplicateTimestampCount + gyroStream.duplicateTimestampCount + rotationStream.duplicateTimestampCount,
+                nonMonotonicTimestampCount = gpsStream.nonMonotonicTimestampCount + accelStream.nonMonotonicTimestampCount + gyroStream.nonMonotonicTimestampCount + rotationStream.nonMonotonicTimestampCount,
+                interruptionCount = if (gpsInterruptionDetected || sensorInterruptionDetected) 1 else 0,
+                storageFailureCount = writeFailureCount,
+                droppedSampleCount = droppedSampleCount,
+                warningsJson = warnings.toString(),
+                completeness = if (warnings.length() == 0) "COMPLETE" else "COMPLETE_WITH_WARNINGS"
+            )
+        )
+    }
+
+    private fun broadcastRecordingStarted() {
+        sendAppBroadcast(Intent(ACTION_RECORDING_STARTED).apply {
+            putExtra(EXTRA_TRIP_ID, draftTripId)
+            putExtra(EXTRA_TRIP_UUID, draftTripUuid)
+            putExtra(EXTRA_START_TIME_MS, startTimeMs)
+            putExtra(EXTRA_DIRECTION, configuredDirection)
+            putExtra(EXTRA_OBSERVATION_PERIOD, configuredObservationPeriod)
+            putExtra(EXTRA_STUDY_DATE, configuredStudyDate)
+        })
+    }
+
+    private fun sendRecordingState() {
+        sendAppBroadcast(Intent(ACTION_STATE).apply {
+            putExtra(EXTRA_ACTIVE, lifecycleState != RecordingState.IDLE)
+            putExtra(EXTRA_RECORDING_STATE, lifecycleState.name)
+            putExtra(EXTRA_TRIP_ID, draftTripId)
+            putExtra(EXTRA_TRIP_UUID, draftTripUuid)
+            putExtra(EXTRA_START_TIME_MS, startTimeMs)
+            putExtra(EXTRA_DIRECTION, configuredDirection)
+            putExtra(EXTRA_OBSERVATION_PERIOD, configuredObservationPeriod)
+            putExtra(EXTRA_STUDY_DATE, configuredStudyDate)
+            putExtra(EXTRA_TIME_ZONE_ID, ResearchTime.KATHMANDU_ZONE_ID)
+        })
+    }
+
+    private fun finishServiceWithoutCompletion() {
+        synchronized(this) {
+            isRunning.set(false)
+            lifecycleState = RecordingState.IDLE
+            stopRequested = false
+        }
+        sendRecordingState()
+        handler.removeCallbacks(statusUpdateRunnable)
+        handler.removeCallbacks(locationUpdateRunnable)
+        flushJob?.cancel()
+        flushJob = null
+        draftReady.set(false)
+        startJob = null
+        if (wakeLock.isHeld) {
+            wakeLock.release()
+            Log.i(TAG, "WakeLock released")
+        }
+        handler.post {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+        draftTripId = -1L
+        draftTripUuid = ""
+        Log.i(TAG, "Service stopped")
     }
 
     private fun startVoskListening() {
@@ -638,6 +1290,48 @@ class LoggerService : Service() {
             return
         }
         Log.i(TAG, "startVoskListening called, recognizer=$recognizer")
+        val audioTripId = draftTripId
+        val audioRecorder = tripAudioRecorder ?: TripAudioRecorder(
+            directory = File(filesDir, "audio"),
+            onSegmentStarted = { segment ->
+                enqueueAudioPersistence {
+                    database.tripDao().insertAudio(
+                        TripAudio(
+                            audioId = segment.audioId,
+                            tripId = audioTripId,
+                            segmentSequence = segment.segmentSequence,
+                            startTimeMs = segment.startTimeMs,
+                            startElapsedRealtimeNanos = segment.startElapsedRealtimeNanos,
+                            filePath = segment.file.absolutePath,
+                            status = TripAudioStatus.PENDING
+                        )
+                    )
+                }
+            },
+            onSegmentCompleted = { segment, endTimeMs, endElapsedNanos, status, sha256, reason ->
+                enqueueAudioPersistence {
+                    database.tripDao().insertAudio(
+                        TripAudio(
+                            audioId = segment.audioId,
+                            tripId = audioTripId,
+                            segmentSequence = segment.segmentSequence,
+                            startTimeMs = segment.startTimeMs,
+                            endTimeMs = endTimeMs,
+                            startElapsedRealtimeNanos = segment.startElapsedRealtimeNanos,
+                            endElapsedRealtimeNanos = endElapsedNanos,
+                            filePath = segment.file.absolutePath,
+                            fileSizeBytes = segment.file.length().takeIf { it > 0L },
+                            sha256 = sha256,
+                            status = status,
+                            interruptionReason = reason
+                        )
+                    )
+                }
+            }
+        ).also {
+            it.start(startTimeMs, startNanoTime)
+            tripAudioRecorder = it
+        }
         isListening = true
         broadcastStatus()
 
@@ -649,7 +1343,7 @@ class LoggerService : Service() {
             }
 
             override fun onResult(text: String, confidence: Float) {
-                Log.i(TAG, "Vosk result callback: '$text' confidence=$confidence")
+                Log.i(TAG, "Vosk result callback confidence=$confidence")
                 broadcastHeardText(text, isPartial = false)
 
                 if (text.isEmpty()) {
@@ -682,7 +1376,7 @@ class LoggerService : Service() {
                 val exactCause = causeConfig.phraseToCauseMap["$activation $command"]
                 if (exactCause != null) {
                     Log.i(TAG, "Exact phrase mapped to cause: $exactCause")
-                    recordCauseEvent(exactCause)
+                    recordCauseEvent(exactCause, EventProvenance.VOICE_RECOGNIZED, text, confidence)
                     return
                 }
 
@@ -690,7 +1384,7 @@ class LoggerService : Service() {
                 val match = fuzzyMatcher.findBestMatch(command)
                 if (match != null) {
                     Log.i(TAG, "Fuzzy matched cause: ${match.causeCode} (via '${match.matchedWord}', score=${match.score})")
-                    recordCauseEvent(match.causeCode)
+                    recordCauseEvent(match.causeCode, EventProvenance.VOICE_RECOGNIZED, text, confidence)
                 } else {
                     Log.d(TAG, "No cause matched for: '$text'")
                 }
@@ -698,7 +1392,7 @@ class LoggerService : Service() {
 
             override fun onPartialResult(text: String) {
                 if (text.isNotEmpty()) {
-                    Log.d(TAG, "Vosk partial callback: '$text'")
+                    Log.d(TAG, "Vosk partial callback received")
                     broadcastHeardText(text, isPartial = true)
                 }
             }
@@ -714,12 +1408,33 @@ class LoggerService : Service() {
                     handler.postDelayed({ startVoskListening() }, 1000)
                 }
             }
-        })
+        }, audioRecorder)
+    }
+
+    private fun enqueueAudioPersistence(operation: suspend () -> Unit) {
+        val job = serviceScope.launch {
+            try {
+                operation()
+            } catch (error: Exception) {
+                incrementWriteFailure()
+                Log.e(TAG, "Could not persist audio segment metadata", error)
+            }
+        }
+        synchronized(audioPersistenceJobs) {
+            audioPersistenceJobs += job
+        }
+    }
+
+    private suspend fun awaitAudioPersistence() {
+        val jobs = synchronized(audioPersistenceJobs) {
+            audioPersistenceJobs.toList().also { audioPersistenceJobs.clear() }
+        }
+        jobs.joinAll()
     }
 
     private fun broadcastHeardText(text: String, isPartial: Boolean) {
-        Log.d(TAG, "Broadcasting heard text: '$text' (partial=$isPartial)")
-        sendBroadcast(Intent(ACTION_HEARD_TEXT).apply {
+        Log.d(TAG, "Broadcasting speech result (partial=$isPartial)")
+        sendAppBroadcast(Intent(ACTION_HEARD_TEXT).apply {
             putExtra(EXTRA_HEARD_TEXT, text)
             putExtra(EXTRA_IS_PARTIAL, isPartial)
         })
@@ -728,14 +1443,15 @@ class LoggerService : Service() {
     private fun broadcastLatestLocation() {
         val lastPoint = lastGpsPoint
         if (lastPoint == null) {
-            Log.w(TAG, "broadcastLatestLocation: no GPS points yet, nothing to broadcast")
+            Log.w(TAG, "broadcastLatestLocation: no GPS point yet")
             return
         }
-        Log.i(TAG, "broadcastLatestLocation: lat=${lastPoint.lat} lon=${lastPoint.lon} speed=${lastPoint.speedKmh} gpsCount=$gpsPointCount")
-        sendBroadcast(Intent(ACTION_LOCATION_UPDATE).apply {
+        Log.i(TAG, "broadcastLatestLocation: provider=${lastPoint.provider} accuracy=${lastPoint.horizontalAccuracyMeters} gpsCount=$gpsPointCount")
+        sendAppBroadcast(Intent(ACTION_LOCATION_UPDATE).apply {
             putExtra(EXTRA_LAT, lastPoint.lat)
             putExtra(EXTRA_LON, lastPoint.lon)
-            putExtra(EXTRA_SPEED, lastPoint.speedKmh)
+            putExtra(EXTRA_SPEED, lastPoint.speedKmh ?: 0f)
+            putExtra(EXTRA_ACCURACY, lastPoint.horizontalAccuracyMeters ?: -1f)
         })
     }
 
@@ -746,42 +1462,89 @@ class LoggerService : Service() {
             val minutes = (duration / 1000 / 60) % 60
             val hours = duration / 1000 / 60 / 60
             String.format(
-                "Duration: %02d:%02d:%02d | Events: %d | GPS: %s | Mic: %s",
+                "State: %s | %s/%s | Duration: %02d:%02d:%02d | Events: %d | GPS: %s | Mic: %s | Writes: %d",
+                lifecycleState.name,
+                configuredDirection ?: "direction?",
+                configuredObservationPeriod ?: "period?",
                 hours, minutes, seconds,
                 eventCount,
                 if (gpsLocked) "locked" else "searching",
-                if (isListening) "listening" else "idle"
+                if (isListening) "listening" else "idle",
+                writeFailureCount
             )
         }
-        sendBroadcast(Intent(ACTION_STATUS).apply {
+        sendAppBroadcast(Intent(ACTION_STATUS).apply {
             putExtra(EXTRA_STATUS, statusText)
         })
+        if (lifecycleState != RecordingState.IDLE) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, buildNotification())
+        }
     }
 
     private fun broadcastCauseRecognized(cause: String) {
-        sendBroadcast(Intent(ACTION_STATUS).apply {
+        sendAppBroadcast(Intent(ACTION_STATUS).apply {
             putExtra(EXTRA_STATUS, "cause:$cause")
         })
     }
 
-    private fun recordCauseEvent(causeCode: String) {
+    private fun recordCauseEvent(
+        causeCode: String,
+        provenance: String = EventProvenance.MANUAL_MARKER,
+        transcript: String? = null,
+        recognitionConfidence: Float? = null
+    ) {
         if (!isRunning.get()) return
         Log.i(TAG, "Recording cause event: $causeCode")
-        val event = DelayEvent(
-            timestamp = System.currentTimeMillis(),
-            causeCode = causeCode
-        )
-        synchronized(bufferLock) {
-            eventBuffer.add(event)
-            eventCount++
-            causeBreakdownMap[causeCode] = (causeBreakdownMap[causeCode] ?: 0) + 1
-        }
+        val event = recordEvent(
+            causeCode = causeCode,
+            provenance = provenance,
+            transcript = transcript,
+            recognitionConfidence = recognitionConfidence
+        ) ?: return
         broadcastCauseRecognized(causeCode)
 
         if (captureEnabled) {
-            Log.i(TAG, "Triggering photo capture for cause: $causeCode")
-            requestPhotoCapture()
+            Log.i(TAG, "Triggering photo capture for event ${event.eventId}")
+            requestPhotoCapture(event.eventId)
         }
+    }
+
+    private fun recordEvent(
+        causeCode: String,
+        provenance: String,
+        transcript: String? = null,
+        recognitionConfidence: Float? = null
+    ): DelayEvent? {
+        val gps = lastGpsPoint
+        val markerTimeMs = System.currentTimeMillis()
+        val markerElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+        val fixTimeMs = gps?.sourceEpochTimeMs ?: gps?.timestampMs
+        val event = DelayEvent(
+            timestamp = markerTimeMs,
+            causeCode = causeCode,
+            elapsedRealtimeNanos = markerElapsedRealtimeNanos,
+            latitude = gps?.lat,
+            longitude = gps?.lon,
+            speedKmh = gps?.speedKmh,
+            locationAccuracyMeters = gps?.horizontalAccuracyMeters,
+            locationProvider = gps?.provider,
+            locationFixTimeMs = fixTimeMs,
+            locationFixElapsedRealtimeNanos = gps?.sourceElapsedRealtimeNanos,
+            speedValid = gps?.speedValid,
+            provenance = provenance,
+            transcript = transcript,
+            recognitionConfidence = recognitionConfidence
+        )
+        if (!appendBuffered(eventBuffer, event)) return null
+        synchronized(bufferLock) {
+            eventCount++
+            causeBreakdownMap[causeCode] = (causeBreakdownMap[causeCode] ?: 0) + 1
+        }
+        // A marker is high-value evidence. Trigger a serialized flush immediately;
+        // the periodic writer remains responsible for normal sensor throughput.
+        serviceScope.launch { flushBuffersToDatabase() }
+        return event
     }
 
     private fun createNotificationChannel() {
@@ -812,10 +1575,13 @@ class LoggerService : Service() {
         val hours = duration / 1000 / 60 / 60
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("RoadLog — Recording")
+            .setContentTitle(if (lifecycleState == RecordingState.PREPARING) "RoadLog — Preparing" else "RoadLog — Recording")
             .setContentText(
                 String.format(
-                    "GPS: %s | Mic: %s | Events: %d | %02d:%02d:%02d",
+                    "%s | %s/%s | GPS: %s | Mic: %s | Events: %d | %02d:%02d:%02d",
+                    lifecycleState.name,
+                    configuredDirection ?: "direction?",
+                    configuredObservationPeriod ?: "period?",
                     if (gpsLocked) "active" else "searching",
                     if (isListening) "listening" else "idle",
                     eventCount,
@@ -827,6 +1593,11 @@ class LoggerService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()
+    }
+
+    private fun sendAppBroadcast(intent: Intent) {
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

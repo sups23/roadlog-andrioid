@@ -1,19 +1,29 @@
 # RoadLog
 
-RoadLog is an Android app for recording and reviewing road trips. It combines
-GPS, motion sensors, offline speech recognition, optional photos, and trip
-analytics in one local-first logger.
+RoadLog is an offline-first Android research instrument for repeated directional
+traversals of one configured Kathmandu corridor. It combines GPS, raw motion
+sensors, continuous segmented voice audio, offline speech recognition, optional
+photos, structured event annotation, and trip QA in one local-first logger.
 
 ## Features
 
 - Foreground trip recording with GPS location and speed.
 - Accelerometer, gyroscope, and rotation sensor capture.
+- Explicit `A_TO_B`/`B_TO_A` direction and `MORNING`/`OFF_PEAK`/`EVENING`
+  observation-period codes.
+- Static study session/corridor IDs plus unique trip, event, media, and audio-segment identities.
+- Raw timestamp provenance and Kathmandu local study date.
+- Passenger-only categorized event marking with later primary/secondary annotation,
+  traffic state, confidence, and source-location review.
+- Segmented AAC/M4A source audio from the same microphone stream used by Vosk.
 - Offline Vosk speech recognition for configurable road-condition causes.
-- Manual cause entry from the main screen.
+- Manual cause entry, including `UNCLASSIFIED`, from the main screen.
 - Optional automatic and manual CameraX photos with location and timestamps.
 - OpenStreetMap route display and cached map tiles.
 - Room-backed trip history with route, event timeline, sensor charts, cause
-  breakdowns, and photos.
+  breakdowns, structured annotations, QA status, and photos.
+- Offline ZIP research export with raw sensors, annotations, audio, metadata,
+  checksums, and manifest counts.
 - Debug-only demo trip seeding for manual UI checks.
 
 ## Requirements
@@ -66,6 +76,10 @@ Instrumentation tests require a connected device or emulator.
   say `log pothole` or `log unclassified`; unrelated speech, unmatched
   words, and low-confidence results are ignored.
 - Disable battery optimization for reliable long recordings.
+- The field screen uses one static study session ID and one static corridor ID;
+  neither needs to be entered before a trip.
+- The stored period is always explicitly selected. Exact Kathmandu suggestion
+  windows remain a field-protocol decision and are not inferred from timestamps.
 - Diagnostics: `adb logcat -s RoadLog:D`.
 
 ### OpenStreetMap Tiles

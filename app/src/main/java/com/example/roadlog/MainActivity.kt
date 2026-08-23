@@ -13,6 +13,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.os.SystemClock
+import android.os.BatteryManager
+import android.os.StatFs
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -21,14 +24,18 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import android.location.LocationManager
+import android.hardware.SensorManager
 import android.widget.TextView
 import android.widget.Toast
 import android.util.Log
+import android.graphics.BitmapFactory
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -39,14 +46,18 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
+import java.security.MessageDigest
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
 
@@ -79,13 +90,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraCheckBox: CheckBox
     private lateinit var previewView: PreviewView
     private lateinit var takePhotoButton: Button
+    private lateinit var directionSpinner: Spinner
+    private lateinit var observationPeriodSpinner: Spinner
+    private lateinit var studyDateText: TextView
+    private lateinit var healthText: TextView
+    private lateinit var causeLabelsContainer: LinearLayout
 
     private var imageCapture: ImageCapture? = null
     private lateinit var cameraExecutor: ExecutorService
-    private var captureSessionStartMs = 0L
-    private var captureSessionEndMs = 0L
     private var pendingStartAfterCameraPermission = false
     private var isRecording = false
+    private var isPreparingRecording = false
+    private var isFinalizingRecording = false
+    private var activeTripId = -1L
+    private val photoPersistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var mapFollowUser = true
     private var lastHeardText = "—"
@@ -142,7 +160,7 @@ class MainActivity : AppCompatActivity() {
             val lat = intent?.getDoubleExtra(LoggerService.EXTRA_LAT, 0.0) ?: return
             val lon = intent.getDoubleExtra(LoggerService.EXTRA_LON, 0.0)
             val speed = intent.getFloatExtra(LoggerService.EXTRA_SPEED, 0f)
-            Log.i(TAG, "Location broadcast received: lat=$lat lon=$lon speed=$speed")
+            Log.i(TAG, "Location broadcast received: speed=$speed")
             runOnUiThread {
                 lastSpeedKmh = speed
                 updateMapLocation(lat, lon)
@@ -156,11 +174,48 @@ class MainActivity : AppCompatActivity() {
             val lat = intent?.getDoubleExtra(LoggerService.EXTRA_LAT, 0.0) ?: 0.0
             val lon = intent?.getDoubleExtra(LoggerService.EXTRA_LON, 0.0) ?: 0.0
             val photoTime = intent?.getLongExtra(LoggerService.EXTRA_PHOTO_TIME, System.currentTimeMillis()) ?: System.currentTimeMillis()
-            Log.i(TAG, "Capture photo received: lat=$lat lon=$lon")
+            val requestElapsedNanos = intent?.getLongExtra(LoggerService.EXTRA_REQUEST_ELAPSED_NANOS, 0L)?.takeIf { it > 0L }
+            val tripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, activeTripId) ?: activeTripId
+            val captureId = intent?.getStringExtra(LoggerService.EXTRA_CAPTURE_ID)
+            val eventId = intent?.getStringExtra(LoggerService.EXTRA_EVENT_ID)
+            Log.i(TAG, "Capture photo request received")
             if (ContextCompat.checkSelfPermission(this@MainActivity, cameraPermission) == PackageManager.PERMISSION_GRANTED) {
-                takePhoto(lat, lon, photoTime)
+                takePhoto(lat, lon, photoTime, requestElapsedNanos, tripId, captureId, eventId)
             } else {
                 Log.w(TAG, "Camera permission not granted, skipping photo")
+            }
+        }
+    }
+
+    private val recordingStartedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            activeTripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, -1L) ?: -1L
+            if (activeTripId >= 0L) {
+                isPreparingRecording = false
+                isFinalizingRecording = false
+                selectResearchValues(intent?.getStringExtra(LoggerService.EXTRA_DIRECTION), intent?.getStringExtra(LoggerService.EXTRA_OBSERVATION_PERIOD))
+                statusText.text = "Recording started and saved locally"
+                updateUiState(isRecording = true)
+            }
+        }
+    }
+
+    private val recordingStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val active = intent?.getBooleanExtra(LoggerService.EXTRA_ACTIVE, false) ?: false
+            val state = intent?.getStringExtra(LoggerService.EXTRA_RECORDING_STATE)
+            activeTripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, -1L) ?: -1L
+            if (active) {
+                isRecording = true
+                isPreparingRecording = state == RecordingState.PREPARING.name
+                isFinalizingRecording = state == RecordingState.FINALIZING.name
+                selectResearchValues(intent?.getStringExtra(LoggerService.EXTRA_DIRECTION), intent?.getStringExtra(LoggerService.EXTRA_OBSERVATION_PERIOD))
+                updateUiState(isRecording = true)
+            } else if (state == RecordingState.IDLE.name || state == null) {
+                isPreparingRecording = false
+                isFinalizingRecording = false
+                activeTripId = -1L
+                updateUiState(isRecording = false)
             }
         }
     }
@@ -169,14 +224,15 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val tripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, -1L) ?: return
             if (tripId < 0) return
-            Log.i(TAG, "Trip saved id=$tripId, attaching pending photos")
-            lifecycleScope.launch(Dispatchers.IO) {
-                val db = AppDatabase.getDatabase(this@MainActivity)
-                val photos = db.tripDao().getPhotosForTrip(0L)
-                    .filter { it.timestamp in captureSessionStartMs..captureSessionEndMs }
-                for (photo in photos) {
-                    db.tripDao().updatePhoto(photo.copy(tripId = tripId))
-                }
+            Log.i(TAG, "Trip saved id=$tripId; local database is authoritative")
+            if (activeTripId == tripId) {
+                activeTripId = -1L
+                isPreparingRecording = false
+                isFinalizingRecording = false
+                isRecording = false
+                updateUiState(isRecording = false)
+                statusText.text = "Trip saved locally"
+                statusText.visibility = View.VISIBLE
             }
         }
     }
@@ -200,7 +256,25 @@ class MainActivity : AppCompatActivity() {
         cameraCheckBox = findViewById(R.id.cameraCheckBox)
         previewView = findViewById(R.id.previewView)
         takePhotoButton = findViewById(R.id.takePhotoButton)
+        directionSpinner = findViewById(R.id.directionSpinner)
+        observationPeriodSpinner = findViewById(R.id.observationPeriodSpinner)
+        studyDateText = findViewById(R.id.studyDateText)
+        healthText = findViewById(R.id.healthText)
+        causeLabelsContainer = findViewById(R.id.causeLabelsContainer)
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        directionSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf("Select direction", ResearchDirection.A_TO_B, ResearchDirection.B_TO_A)
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        observationPeriodSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf("Select period", "Morning peak", "Afternoon / off-peak", "Evening peak")
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        studyDateText.text = "Study date: ${ResearchClock.studyDateLocal(System.currentTimeMillis())} (${ResearchTime.KATHMANDU_ZONE_ID})"
+        updatePreTripHealth()
 
         cameraCheckBox.text = getString(R.string.camera_checkbox_label)
         cameraCheckBox.setOnCheckedChangeListener { _, isChecked ->
@@ -210,6 +284,7 @@ class MainActivity : AppCompatActivity() {
             if (isRecording) {
                 takePhotoButton.visibility = if (isChecked) View.VISIBLE else View.GONE
             }
+            updatePreTripHealth()
         }
 
         takePhotoButton.setOnClickListener { captureManualPhoto() }
@@ -231,7 +306,6 @@ class MainActivity : AppCompatActivity() {
 
         Log.i(TAG, "Loaded ${causeConfig.causes.size} causes for UI: ${causeConfig.causes.map { it.code }}")
 
-        val container = findViewById<LinearLayout>(R.id.causeLabelsContainer)
         val labels = mutableMapOf<String, TextView>()
         val displayMetrics = resources.displayMetrics
         val labelHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 56f, displayMetrics).toInt()
@@ -286,7 +360,7 @@ class MainActivity : AppCompatActivity() {
                 row.addView(placeholder)
             }
 
-            container.addView(row)
+            causeLabelsContainer.addView(row)
         }
         causeLabels = labels
 
@@ -355,6 +429,20 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
+        ContextCompat.registerReceiver(
+            this,
+            recordingStartedReceiver,
+            IntentFilter(LoggerService.ACTION_RECORDING_STARTED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        ContextCompat.registerReceiver(
+            this,
+            recordingStateReceiver,
+            IntentFilter(LoggerService.ACTION_STATE),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!hasAllPermissions()) {
                 ActivityCompat.requestPermissions(
@@ -395,6 +483,8 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(locationReceiver)
         unregisterReceiver(capturePhotoReceiver)
         unregisterReceiver(tripSavedReceiver)
+        unregisterReceiver(recordingStartedReceiver)
+        unregisterReceiver(recordingStateReceiver)
         pendingStatusHide?.let { handler.removeCallbacks(it) }
         if (::cameraExecutor.isInitialized) {
             cameraExecutor.shutdown()
@@ -403,9 +493,17 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        updatePreTripHealth()
         if (::mapView.isInitialized) {
             mapView.onResume()
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        startService(Intent(this, LoggerService::class.java).apply {
+            action = LoggerService.ACTION_QUERY_STATE
+        })
     }
 
     override fun onPause() {
@@ -473,7 +571,7 @@ class MainActivity : AppCompatActivity() {
         val location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
             ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
         return location?.let {
-            Log.d(TAG, "Last known location: ${it.latitude},${it.longitude}")
+             Log.d(TAG, "Last known location available")
             GeoPoint(it.latitude, it.longitude)
         }
     }
@@ -524,6 +622,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStartClicked() {
         Log.d(TAG, "START button clicked")
+        val validation = TripStartValidator.validate(
+            TripStartConfiguration(
+                direction = selectedDirectionCode(),
+                observationPeriod = selectedObservationPeriodCode()
+            )
+        )
+        if (validation.isNotEmpty()) {
+            Toast.makeText(this, validation.joinToString("; "), Toast.LENGTH_LONG).show()
+            return
+        }
         if (!hasAllPermissions()) {
             ActivityCompat.requestPermissions(this, permissions, permissionRequestCode)
             return
@@ -542,11 +650,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        captureSessionStartMs = System.currentTimeMillis()
-        captureSessionEndMs = 0L
         val intent = Intent(this, LoggerService::class.java).apply {
             action = LoggerService.ACTION_START
             putExtra(LoggerService.EXTRA_ENABLE_CAMERA, cameraCheckBox.isChecked)
+            putExtra(LoggerService.EXTRA_DIRECTION, selectedDirectionCode())
+            putExtra(LoggerService.EXTRA_OBSERVATION_PERIOD, selectedObservationPeriodCode())
+            putExtra(LoggerService.EXTRA_STUDY_DATE, ResearchClock.studyDateLocal(System.currentTimeMillis()))
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -554,12 +663,15 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
         }
         pendingStatusHide?.let { handler.removeCallbacks(it) }
+        activeTripId = -1L
+        isPreparingRecording = true
+        isFinalizingRecording = false
         updateUiState(isRecording = true)
         lastHeardText = "—"
         lastMatchedCause = "—"
         updateCauseHeardLine()
         clearMapPath()
-        modelStatusText.text = "Trip started — waiting for GPS..."
+        modelStatusText.text = "Preparing local trip record..."
         if (cameraCheckBox.isChecked) {
             setKeepScreenOn()
             bindCameraIfEnabled()
@@ -567,12 +679,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopRecording() {
-        captureSessionEndMs = System.currentTimeMillis()
         val intent = Intent(this, LoggerService::class.java).apply {
             action = LoggerService.ACTION_STOP
         }
         startService(intent)
-        updateUiState(isRecording = false)
+        isPreparingRecording = false
+        isFinalizingRecording = true
+        updateUiState(isRecording = true)
         clearKeepScreenOn()
         unbindCamera()
         pendingStatusHide?.let { handler.removeCallbacks(it) }
@@ -587,10 +700,77 @@ class MainActivity : AppCompatActivity() {
         modelStatusText.text = ""
     }
 
+    private fun selectedDirectionCode(): String? = when (directionSpinner.selectedItemPosition) {
+        1 -> ResearchDirection.A_TO_B
+        2 -> ResearchDirection.B_TO_A
+        else -> null
+    }
+
+    private fun selectedObservationPeriodCode(): String? = when (observationPeriodSpinner.selectedItemPosition) {
+        1 -> ObservationPeriod.MORNING
+        2 -> ObservationPeriod.OFF_PEAK
+        3 -> ObservationPeriod.EVENING
+        else -> null
+    }
+
+    private fun selectResearchValues(direction: String?, period: String?) {
+        directionSpinner.setSelection(
+            when (direction) {
+                ResearchDirection.A_TO_B -> 1
+                ResearchDirection.B_TO_A -> 2
+                else -> 0
+            }
+        )
+        observationPeriodSpinner.setSelection(
+            when (period) {
+                ObservationPeriod.MORNING -> 1
+                ObservationPeriod.OFF_PEAK -> 2
+                ObservationPeriod.EVENING -> 3
+                else -> 0
+            }
+        )
+    }
+
     private fun hasAllPermissions(): Boolean {
         return permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    private fun updatePreTripHealth() {
+        if (!::healthText.isInitialized) return
+        val locationReady = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            runCatching {
+                val manager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                manager.isProviderEnabled(LocationManager.GPS_PROVIDER) || manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            }.getOrDefault(false)
+        val microphoneReady = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val accelerometerReady = sensors.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) != null
+        val gyroscopeReady = sensors.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE) != null
+        val orientationReady = sensors.getDefaultSensor(android.hardware.Sensor.TYPE_GAME_ROTATION_VECTOR) != null ||
+            sensors.getDefaultSensor(android.hardware.Sensor.TYPE_ROTATION_VECTOR) != null
+        val storageMb = StatFs(filesDir.path).availableBytes / (1024.0 * 1024.0)
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val batteryPercent = battery?.let {
+            val level = it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            if (level >= 0 && scale > 0) level * 100 / scale else null
+        }
+        val cameraReady = !cameraCheckBox.isChecked || hasCameraPermission()
+        val checks = listOf(
+            "GPS" to locationReady,
+            "mic" to microphoneReady,
+            "accel" to accelerometerReady,
+            "gyro" to gyroscopeReady,
+            "orientation" to orientationReady,
+            "camera" to cameraReady
+        )
+        val missing = checks.filterNot { it.second }.map { it.first }
+        healthText.text = "Pre-trip check: ${if (missing.isEmpty()) "READY" else "WARN ${missing.joinToString()}"} · Storage %.0f MB · Battery %s".format(
+            storageMb,
+            batteryPercent?.let { "$it%" } ?: "unknown"
+        )
     }
 
     override fun onRequestPermissionsResult(
@@ -604,6 +784,7 @@ class MainActivity : AppCompatActivity() {
                 if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                     refreshLocationOverlay()
                     centerMapOnLastKnownLocation()
+                    updatePreTripHealth()
                 } else {
                     Toast.makeText(
                         this,
@@ -614,7 +795,8 @@ class MainActivity : AppCompatActivity() {
             }
             permissionRequestCode -> {
                 if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                    startRecording()
+                    onStartClicked()
+                    updatePreTripHealth()
                 } else {
                     Toast.makeText(this, "Permissions required to record trip", Toast.LENGTH_LONG).show()
                 }
@@ -624,6 +806,7 @@ class MainActivity : AppCompatActivity() {
                     if (cameraCheckBox.isChecked) {
                         bindCameraIfEnabled()
                     }
+                    updatePreTripHealth()
                     if (pendingStartAfterCameraPermission) {
                         pendingStartAfterCameraPermission = false
                         startRecording()
@@ -656,13 +839,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUiState(isRecording: Boolean) {
         this.isRecording = isRecording
-        startButton.isEnabled = !isRecording
-        stopButton.isEnabled = isRecording
+        startButton.isEnabled = !isRecording && !isFinalizingRecording
+        stopButton.isEnabled = isRecording && !isFinalizingRecording
         cameraCheckBox.isEnabled = !isRecording
-        takePhotoButton.visibility = if (isRecording && cameraCheckBox.isChecked) View.VISIBLE else View.GONE
+        lastSpokenText.visibility = if (isRecording) View.VISIBLE else View.GONE
+        modelStatusText.visibility = if (isRecording) View.VISIBLE else View.GONE
+        takePhotoButton.visibility = if (isRecording && !isFinalizingRecording && cameraCheckBox.isChecked) View.VISIBLE else View.GONE
+        directionSpinner.isEnabled = !isRecording && !isFinalizingRecording
+        observationPeriodSpinner.isEnabled = !isRecording && !isFinalizingRecording
+        causeLabelsContainer.visibility = if (isRecording && !isPreparingRecording && !isFinalizingRecording) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         if (isRecording) {
             statusText.visibility = View.VISIBLE
-            statusText.text = "Trip running"
+            statusText.text = if (isFinalizingRecording) {
+                "Stopping and saving locally..."
+            } else if (isPreparingRecording) {
+                "Preparing local trip record..."
+            } else {
+                "Trip running and saved locally"
+            }
         }
     }
 
@@ -761,44 +959,118 @@ class MainActivity : AppCompatActivity() {
         val point = lastMapPoint ?: getLastKnownLocation()
         val lat = point?.latitude ?: 0.0
         val lon = point?.longitude ?: 0.0
-        Log.i(TAG, "Manual photo requested at lat=$lat lon=$lon")
-        takePhoto(lat, lon, System.currentTimeMillis())
+        Log.i(TAG, "Manual photo requested")
+        takePhoto(lat, lon, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos(), activeTripId, null, null)
     }
 
-    private fun takePhoto(lat: Double, lon: Double, timestamp: Long) {
+    private fun takePhoto(
+        lat: Double,
+        lon: Double,
+        timestamp: Long,
+        requestElapsedRealtimeNanos: Long?,
+        tripId: Long,
+        captureId: String?,
+        eventId: String?
+    ) {
         val capture = imageCapture ?: run {
             Log.w(TAG, "takePhoto skipped: imageCapture not ready")
             Toast.makeText(this, "Camera not ready yet", Toast.LENGTH_SHORT).show()
             return
         }
+        val ownedTripId = if (tripId >= 0L) tripId else activeTripId
+        if (ownedTripId < 0L) {
+            Log.w(TAG, "Photo request has no active durable trip")
+            return
+        }
+        val stableCaptureId = captureId ?: UUID.randomUUID().toString()
         val photosDir = File(filesDir, "photos").apply { mkdirs() }
-        val file = File(photosDir, "bump_${timestamp}.jpg")
-        val options = ImageCapture.OutputFileOptions.Builder(file).build()
-        capture.takePicture(
-            options,
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed", exc)
-                }
+        val file = File(photosDir, "capture_${stableCaptureId}.jpg")
 
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Log.i(TAG, "Photo saved: ${file.absolutePath}")
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        val db = AppDatabase.getDatabase(this@MainActivity)
-                        db.tripDao().insertPhoto(
-                            TripPhoto(
-                                tripId = 0L,
-                                timestamp = timestamp,
-                                latitude = if (lat != 0.0) lat else null,
-                                longitude = if (lon != 0.0) lon else null,
-                                filePath = file.absolutePath
-                            )
-                        )
+        // A pending media row is created before requesting the asynchronous camera
+        // operation. Delayed callbacks therefore have a stable owner.
+        photoPersistenceScope.launch {
+            val db = AppDatabase.getDatabase(applicationContext)
+            if (db.tripDao().getPhotoByCaptureId(stableCaptureId) == null) {
+                db.tripDao().insertPhoto(
+                    TripPhoto(
+                        tripId = ownedTripId,
+                        timestamp = timestamp,
+                        latitude = lat.takeIf { it != 0.0 },
+                        longitude = lon.takeIf { it != 0.0 },
+                        filePath = "",
+                        captureId = stableCaptureId,
+                        eventId = eventId,
+                        requestTimeMs = timestamp,
+                        requestElapsedRealtimeNanos = requestElapsedRealtimeNanos,
+                        mimeType = "image/jpeg",
+                        usabilityStatus = "PENDING",
+                        privacyStatus = "UNREVIEWED"
+                    )
+                )
+            }
+            withContext(Dispatchers.Main) {
+                val options = ImageCapture.OutputFileOptions.Builder(file).build()
+                capture.takePicture(
+                    options,
+                    cameraExecutor,
+                    object : ImageCapture.OnImageSavedCallback {
+                        override fun onError(exc: ImageCaptureException) {
+                            Log.e(TAG, "Photo capture failed", exc)
+                            photoPersistenceScope.launch {
+                                db.tripDao().completePhoto(
+                                    captureId = stableCaptureId,
+                                    filePath = "",
+                                    captureTimeMs = System.currentTimeMillis(),
+                                    captureElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos(),
+                                    fileSizeBytes = 0L,
+                                    sha256 = null,
+                                    width = null,
+                                    height = null,
+                                    usabilityStatus = "FAILED"
+                                )
+                            }
+                        }
+
+                        override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                            Log.i(TAG, "Photo saved for trip=$ownedTripId")
+                            photoPersistenceScope.launch {
+                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeFile(file.absolutePath, bounds)
+                                db.tripDao().completePhoto(
+                                    captureId = stableCaptureId,
+                                    filePath = file.absolutePath,
+                                    captureTimeMs = System.currentTimeMillis(),
+                                    captureElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos(),
+                                    fileSizeBytes = file.length(),
+                                    sha256 = sha256(file),
+                                    width = bounds.outWidth.takeIf { it > 0 },
+                                    height = bounds.outHeight.takeIf { it > 0 },
+                                    usabilityStatus = "UNREVIEWED"
+                                )
+                            }
+                        }
                     }
+                )
+            }
+        }
+    }
+
+    private fun sha256(file: File): String? {
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count <= 0) break
+                    digest.update(buffer, 0, count)
                 }
             }
-        )
+            digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not checksum photo", e)
+            null
+        }
     }
 
     private fun clearKeepScreenOn() {

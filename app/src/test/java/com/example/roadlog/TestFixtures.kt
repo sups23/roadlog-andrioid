@@ -1,7 +1,5 @@
 package com.example.roadlog
 
-import org.json.JSONObject
-
 object TestFixtures {
 
     val BASE_TIME_MS = 1721200000000L
@@ -19,11 +17,7 @@ object TestFixtures {
         eventCount = 3,
         gpsPointCount = 100,
         accelPointCount = 200,
-        causeBreakdown = JSONObject().apply {
-            put("SIGNAL", 1)
-            put("QUEUE", 1)
-            put("ROUGHNESS", 1)
-        }.toString(),
+        causeBreakdown = "{\"SIG\":1,\"QUE\":1,\"RDS\":1}",
         createdAt = BASE_TIME_MS
     )
 
@@ -37,10 +31,7 @@ object TestFixtures {
         eventCount = 2,
         gpsPointCount = 80,
         accelPointCount = 160,
-        causeBreakdown = JSONObject().apply {
-            put("BUS", 1)
-            put("POTHOLE", 1)
-        }.toString(),
+        causeBreakdown = "{\"BUS\":1,\"RDS\":1}",
         createdAt = BASE_TIME_MS + HOUR_MS / 2
     )
 
@@ -151,15 +142,7 @@ object TestFixtures {
         eventCount = 12,
         gpsPointCount = 10_000,
         accelPointCount = 50_000,
-        causeBreakdown = JSONObject().apply {
-            put("SIGNAL", 3)
-            put("QUEUE", 2)
-            put("POTHOLE", 2)
-            put("ROUGHNESS", 2)
-            put("BUS", 1)
-            put("TURNING", 1)
-            put("MARKET", 1)
-        }.toString(),
+        causeBreakdown = "{\"SIG\":3,\"QUE\":2,\"RDS\":4,\"BUS\":1,\"TRN\":1,\"ENC\":1}",
         createdAt = BASE_TIME_MS - 7 * 24 * HOUR_MS
     )
 

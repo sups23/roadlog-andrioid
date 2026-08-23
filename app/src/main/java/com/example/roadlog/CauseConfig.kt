@@ -11,7 +11,8 @@ data class CauseConfig(
     val fuzzyThreshold: Double,
     val minWordLength: Int,
     val activationPhrases: List<String>,
-    val causes: List<CauseDefinition>
+    val causes: List<CauseDefinition>,
+    val version: String = ResearchCodebook.VERSION
 ) {
 
     /**

@@ -32,7 +32,8 @@ object CauseConfigLoader {
                     put("log")
                 }
             ),
-            causes = causes
+            causes = causes,
+            version = root.optString("version", ResearchCodebook.VERSION)
         )
     }
 

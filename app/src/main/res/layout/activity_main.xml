@@ -22,6 +22,48 @@
             android:textSize="24sp"
             android:textStyle="bold" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Travel direction"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/directionSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Travel direction" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Traffic period"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/observationPeriodSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:contentDescription="Observation period" />
+
+        <TextView
+            android:id="@+id/studyDateText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Study date:"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/healthText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Pre-trip check: checking..."
+            android:textSize="12sp" />
+
         <Button
             android:id="@+id/startButton"
             android:layout_width="match_parent"
@@ -45,7 +87,8 @@
             android:id="@+id/causeLabelsContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:orientation="vertical"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/lastSpokenText"
@@ -93,7 +136,7 @@
             android:layout_height="60dp"
             app:backgroundTint="@color/btn_stop_tint"
             android:enabled="false"
-            android:text="@string/stop_and_export"
+            android:text="@string/stop_and_save"
             android:textColor="@android:color/white"
             android:textSize="18sp" />
 

@@ -1,7 +1,5 @@
 package com.example.roadlog
 
-import org.json.JSONArray
-
 /**
  * Builds the grammar JSON used to constrain the Vosk recognizer.
  *
@@ -24,6 +22,23 @@ object GrammarBuilder {
      * Example output: ["log signal","log traffic signal","[unk]"]
      */
     fun buildGrammarJson(config: CauseConfig): String {
-        return JSONArray(config.allGrammarPhrases).toString()
+        return config.allGrammarPhrases.joinToString(",", prefix = "[", postfix = "]") { phrase ->
+            "\"${escapeJson(phrase)}\""
+        }
+    }
+
+    private fun escapeJson(value: String): String = buildString {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\b' -> append("\\b")
+                '\u000C' -> append("\\f")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(character)
+            }
+        }
     }
 }

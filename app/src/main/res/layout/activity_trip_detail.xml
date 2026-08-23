@@ -53,6 +53,13 @@
                         android:textStyle="bold" />
 
                     <TextView
+                        android:id="@+id/detailResearchText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textSize="14sp" />
+
+                    <TextView
                         android:id="@+id/detailDurationText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -79,6 +86,35 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
                         android:textSize="15sp" />
+
+                    <LinearLayout
+                        android:id="@+id/qaActionsContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/qaValidButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Valid" />
+
+                        <Button
+                            android:id="@+id/qaWarningsButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Valid with warnings" />
+
+                        <Button
+                            android:id="@+id/qaInvalidButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Invalid" />
+                    </LinearLayout>
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
 

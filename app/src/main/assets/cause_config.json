@@ -1,4 +1,5 @@
 {
+  "version": "2",
   "confidenceThreshold": 0.6,
   "fuzzyThreshold": 0.85,
   "minWordLength": 3,
@@ -7,7 +8,7 @@
   ],
   "causes": [
     {
-      "code": "SIGNAL",
+      "code": "SIG",
       "displayName": "SIGNAL",
       "shortForm": "SIGNAL",
       "phrases": [
@@ -25,7 +26,7 @@
       ]
     },
     {
-      "code": "QUEUE",
+      "code": "QUE",
       "displayName": "QUEUE",
       "shortForm": "QUEUE",
       "phrases": [
@@ -60,7 +61,7 @@
       ]
     },
     {
-      "code": "PEDESTRIAN",
+      "code": "PED",
       "displayName": "PEDESTRIAN",
       "shortForm": "PED",
       "phrases": [
@@ -76,12 +77,16 @@
       ]
     },
     {
-      "code": "ROUGHNESS",
+      "code": "RDS",
       "displayName": "ROUGHNESS",
       "shortForm": "ROUGH",
       "phrases": [
         "roughness",
-        "rough road"
+        "rough road",
+        "pothole",
+        "pot hole",
+        "speed breaker",
+        "speed bump"
       ],
       "variants": [
         "rough",
@@ -92,33 +97,11 @@
         "rufness",
         "rougnes",
         "roufnes",
-        "bamp"
-      ]
-    },
-    {
-      "code": "POTHOLE",
-      "displayName": "POTHOLE",
-      "shortForm": "POTHL",
-      "phrases": [
-        "pothole",
-        "pot hole"
-      ],
-      "variants": [
+        "bamp",
         "potholes",
         "pot holes",
         "pothol",
-        "pothawl"
-      ]
-    },
-    {
-      "code": "SPEED_BREAKER",
-      "displayName": "SPEED BREAKER",
-      "shortForm": "SPD BRK",
-      "phrases": [
-        "speed breaker",
-        "speed bump"
-      ],
-      "variants": [
+        "pothawl",
         "speed breakers",
         "speedbump",
         "speed bumps",
@@ -127,7 +110,7 @@
       ]
     },
     {
-      "code": "CONSTRUCTION",
+      "code": "INC",
       "displayName": "CONSTRUCTION",
       "shortForm": "CONSTR",
       "phrases": [
@@ -142,7 +125,7 @@
       ]
     },
     {
-      "code": "FRICTION",
+      "code": "PRK",
       "displayName": "FRICTION",
       "shortForm": "FRICT",
       "phrases": [
@@ -161,7 +144,7 @@
       ]
     },
     {
-      "code": "TURNING",
+      "code": "TRN",
       "displayName": "TURNING",
       "shortForm": "TURN",
       "phrases": [
@@ -180,7 +163,7 @@
       ]
     },
     {
-      "code": "MARKET",
+      "code": "ENC",
       "displayName": "MARKET",
       "shortForm": "MARKET",
       "phrases": [
@@ -200,14 +183,14 @@
       ]
     },
     {
-      "code": "UNCLASSIFIED",
-      "displayName": "Other",
-      "shortForm": "OTHER",
+      "code": "UNK",
+      "displayName": "UNCLASSIFIED",
+      "shortForm": "UNCLASSIFIED",
       "phrases": [
         "unclassified"
       ],
       "variants": [],
-      "voiceOnly": true
+      "voiceOnly": false
     }
   ]
 }

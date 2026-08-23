@@ -37,6 +37,7 @@ class TripAdapter(
 
     inner class TripViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val dateText: TextView = itemView.findViewById(R.id.tripDateText)
+        private val researchText: TextView = itemView.findViewById(R.id.tripResearchText)
         private val durationText: TextView = itemView.findViewById(R.id.tripDurationText)
         private val distanceText: TextView = itemView.findViewById(R.id.tripDistanceText)
         private val eventsText: TextView = itemView.findViewById(R.id.tripEventsText)
@@ -48,6 +49,13 @@ class TripAdapter(
             itemView.setOnClickListener { onTripClick(trip) }
 
             dateText.text = dateFormatter.format(Date(trip.startTimeMs))
+            researchText.text = listOfNotNull(
+                trip.studyDateLocal,
+                trip.direction,
+                trip.observationPeriod,
+                "QA: ${trip.qaStatus}",
+                if (trip.partialTraversal) "PARTIAL" else null
+            ).joinToString(" · ")
             durationText.text = formatDuration(trip.startTimeMs, trip.endTimeMs)
             distanceText.text = formatDistance(trip.distanceMeters)
             eventsText.text = "${trip.eventCount} events"

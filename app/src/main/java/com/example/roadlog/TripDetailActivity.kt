@@ -5,11 +5,17 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.Button
+import android.widget.ArrayAdapter
+import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
+import android.text.InputType
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -34,10 +40,15 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var database: AppDatabase
 
     private lateinit var dateText: TextView
+    private lateinit var researchText: TextView
     private lateinit var durationText: TextView
     private lateinit var distanceText: TextView
     private lateinit var speedText: TextView
     private lateinit var eventsText: TextView
+    private lateinit var qaActionsContainer: LinearLayout
+    private lateinit var qaValidButton: Button
+    private lateinit var qaWarningsButton: Button
+    private lateinit var qaInvalidButton: Button
     private lateinit var breakdownContainer: LinearLayout
     private lateinit var timelineContainer: LinearLayout
     private lateinit var speedChart: LineChart
@@ -55,6 +66,7 @@ class TripDetailActivity : AppCompatActivity() {
     private var tripId: Long = -1
     private var tripStart: Long = 0
     private var tripEnd: Long = 0
+    private var currentQaStatus: String = TripQaStatus.UNREVIEWED
 
     private var gpsRouteData: List<TripData> = emptyList()
     private var worldAccelData: List<WorldAccelSample> = emptyList()
@@ -80,10 +92,15 @@ class TripDetailActivity : AppCompatActivity() {
         database = AppDatabase.getDatabase(this)
 
         dateText = findViewById(R.id.detailDateText)
+        researchText = findViewById(R.id.detailResearchText)
         durationText = findViewById(R.id.detailDurationText)
         distanceText = findViewById(R.id.detailDistanceText)
         speedText = findViewById(R.id.detailSpeedText)
         eventsText = findViewById(R.id.detailEventsText)
+        qaActionsContainer = findViewById(R.id.qaActionsContainer)
+        qaValidButton = findViewById(R.id.qaValidButton)
+        qaWarningsButton = findViewById(R.id.qaWarningsButton)
+        qaInvalidButton = findViewById(R.id.qaInvalidButton)
         breakdownContainer = findViewById(R.id.breakdownContainer)
         timelineContainer = findViewById(R.id.timelineContainer)
         speedChart = findViewById(R.id.speedChart)
@@ -106,6 +123,9 @@ class TripDetailActivity : AppCompatActivity() {
 
         deleteButton.setOnClickListener { confirmDelete() }
         viewRouteButton.setOnClickListener { showRouteMap() }
+        qaValidButton.setOnClickListener { updateQaStatus(TripQaStatus.VALID) }
+        qaWarningsButton.setOnClickListener { updateQaStatus(TripQaStatus.VALID_WITH_WARNINGS) }
+        qaInvalidButton.setOnClickListener { updateQaStatus(TripQaStatus.INVALID) }
         showLoading(true)
 
         if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
@@ -146,6 +166,7 @@ class TripDetailActivity : AppCompatActivity() {
 
     private fun setupChart(chart: LineChart, label: String) {
         chart.description.isEnabled = false
+        chart.contentDescription = label
         chart.setDrawGridBackground(false)
         chart.legend.textSize = 12f
         chart.axisRight.isEnabled = false
@@ -171,6 +192,7 @@ class TripDetailActivity : AppCompatActivity() {
                     showLoading(false)
                     return@launch
                 }
+                currentQaStatus = trip.qaStatus
                 ensureActive()
 
                 setStatus("Querying GPS and sensor data...")
@@ -179,9 +201,7 @@ class TripDetailActivity : AppCompatActivity() {
                     database.tripDao().getGpsForTripCapped(tripId, tripStart, tripEnd, VISUAL_ROW_LIMIT)
                 }
                 gpsRouteData = gpsData
-                val events = withContext(Dispatchers.IO) {
-                    database.tripDao().getEventsForTrip(tripId, tripStart, tripEnd)
-                }
+                val events = withContext(Dispatchers.IO) { database.tripDao().getTripEvents(tripId) }
                 val accelData = withContext(Dispatchers.IO) {
                     database.tripDao().getAccelForTripCapped(tripId, tripStart, tripEnd, VISUAL_SENSOR_LIMIT)
                 }
@@ -269,6 +289,15 @@ class TripDetailActivity : AppCompatActivity() {
     private fun bindHeader(trip: Trip, gpsData: List<TripData>) {
         Log.d(TAG, "bindHeader: gps=${gpsData.size}")
         dateText.text = dateFormatter.format(Date(trip.startTimeMs))
+        researchText.text = listOfNotNull(
+            "Study date: ${trip.studyDateLocal ?: "unknown"} (${trip.timeZoneId ?: ResearchTime.KATHMANDU_ZONE_ID})",
+            "Study corridor: ${trip.corridorId}",
+            "Direction: ${trip.direction ?: "unknown"}",
+            "Period: ${trip.observationPeriod ?: "unknown"}",
+            "QA: ${trip.qaStatus}",
+            if (trip.partialTraversal) "Partial coverage until ${trip.coverageEndTimeMs ?: trip.endTimeMs}" else null,
+            trip.interruptionReason?.let { "Interruption: $it" }
+        ).joinToString("\n")
 
         val minutes = TimeUnit.MILLISECONDS.toMinutes(trip.endTimeMs - trip.startTimeMs)
         val hours = minutes / 60
@@ -292,6 +321,26 @@ class TripDetailActivity : AppCompatActivity() {
         speedText.text = String.format("Avg speed: %.1f km/h · Max: %.1f km/h", avgSpeed, maxSpeed)
 
         eventsText.text = "Events: ${trip.eventCount}"
+        qaActionsContainer.visibility = if (trip.qaStatus == TripQaStatus.UNREVIEWED) View.VISIBLE else View.GONE
+    }
+
+    private fun updateQaStatus(status: String) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    database.tripDao().updateTripQa(
+                        tripId = tripId,
+                        qaStatus = status,
+                        qaNotes = if (status == TripQaStatus.VALID_WITH_WARNINGS) {
+                            "Partial or warned traversal reviewed; only covered segments may be used."
+                        } else null
+                    )
+                }
+                loadTripDetails()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not update trip QA", error)
+            }
+        }
     }
 
     private fun bindBreakdown(causeBreakdown: String) {
@@ -305,7 +354,7 @@ class TripDetailActivity : AppCompatActivity() {
                 return
             }
             keys.forEach { cause ->
-                addBreakdownChip("$cause ×${json.getInt(cause)}", true)
+                addBreakdownChip("${displayCause(cause)} ×${json.getInt(cause)}", true)
             }
         } catch (e: Exception) {
             addBreakdownChip("No causes recorded", false)
@@ -334,7 +383,7 @@ class TripDetailActivity : AppCompatActivity() {
         breakdownContainer.addView(chip)
     }
 
-    private fun bindTimeline(events: List<TripData>, tripStartMs: Long) {
+    private fun bindTimeline(events: List<TripEvent>, tripStartMs: Long) {
         Log.d(TAG, "bindTimeline: events=${events.size}")
         timelineContainer.removeAllViews()
         if (events.isEmpty()) {
@@ -348,19 +397,146 @@ class TripDetailActivity : AppCompatActivity() {
         }
 
         events.forEach { event ->
-            val elapsedMs = event.timestamp - tripStartMs
+            val elapsedMs = event.markerTimeMs - tripStartMs
             val elapsedSeconds = TimeUnit.MILLISECONDS.toSeconds(elapsedMs)
             val minutes = elapsedSeconds / 60
             val seconds = elapsedSeconds % 60
             val timeText = String.format("%02d:%02d", minutes, seconds)
 
             val row = TextView(this).apply {
-                text = "$timeText · ${event.eventCause}"
+                val cause = event.primaryCauseCode?.let(::displayCause) ?: "UNANNOTATED"
+                text = "$timeText · $cause · ${event.status} · ${event.provenance}"
                 textSize = 15f
                 setPadding(0, 8, 0, 8)
+                setOnClickListener { showAnnotationDialog(event) }
             }
             timelineContainer.addView(row)
         }
+    }
+
+    private fun displayCause(code: String): String = when (code) {
+        ResearchCodebook.UNCLASSIFIED_CODE -> "UNCLASSIFIED"
+        else -> code
+    }
+
+    private fun showAnnotationDialog(event: TripEvent) {
+        scope.launch {
+            val existing = withContext(Dispatchers.IO) {
+                database.tripDao().getAnnotationsForEvent(event.eventId).lastOrNull()
+            }
+            ensureActive()
+            showAnnotationDialog(event, existing)
+        }
+    }
+
+    private fun showAnnotationDialog(event: TripEvent, existing: EventAnnotationRevision?) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 8, 32, 0)
+        }
+        fun spinner(values: List<String>): Spinner = Spinner(this).also { view ->
+            view.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_item,
+                values
+            ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            form.addView(view)
+        }
+        fun label(text: String) {
+            form.addView(TextView(this).apply {
+                this.text = text
+                setPadding(0, 12, 0, 2)
+            })
+        }
+
+        val causes = ResearchCodebook.primaryCodes.toList().sorted()
+        label("Primary cause")
+        val primary = spinner(causes)
+        label("Secondary cause 1")
+        val secondary1 = spinner(listOf("None") + causes)
+        label("Secondary cause 2")
+        val secondary2 = spinner(listOf("None") + causes)
+        label("Traffic state")
+        val traffic = spinner(listOf("Unspecified") + ResearchCodebook.trafficStates.toList().sorted())
+        label("Confidence")
+        val confidence = spinner(listOf("0", "1", "2", "3"))
+        label("Notes")
+        val notes = EditText(this).apply {
+            hint = "Optional annotation note"
+            minLines = 2
+            setText(existing?.notes.orEmpty())
+        }
+        form.addView(notes)
+        val sourceVisible = CheckBox(this).apply {
+            text = "Source was visible at experienced location"
+            isChecked = event.sourceLocationVisible == true
+        }
+        form.addView(sourceVisible)
+        label("Source latitude (optional)")
+        val sourceLatitude = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setText(event.sourceLatitude?.toString().orEmpty())
+        }
+        form.addView(sourceLatitude)
+        label("Source longitude (optional)")
+        val sourceLongitude = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setText(event.sourceLongitude?.toString().orEmpty())
+        }
+        form.addView(sourceLongitude)
+
+        val existingPrimary = (existing?.primaryCauseCode ?: event.primaryCauseCode)?.let { causes.indexOf(it) } ?: 0
+        primary.setSelection(existingPrimary.coerceAtLeast(0))
+        secondary1.setSelection((existing?.secondaryCause1?.let { causes.indexOf(it) }?.takeIf { it >= 0 }?.plus(1) ?: 0))
+        secondary2.setSelection((existing?.secondaryCause2?.let { causes.indexOf(it) }?.takeIf { it >= 0 }?.plus(1) ?: 0))
+        confidence.setSelection((existing?.confidenceCode ?: event.confidenceCode ?: 0).coerceIn(0, 3))
+        (existing?.trafficState ?: event.trafficState)?.let { state ->
+            val index = ResearchCodebook.trafficStates.toList().sorted().indexOf(state)
+            if (index >= 0) traffic.setSelection(index + 1)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Annotate event")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val secondaryCodes = listOf(secondary1, secondary2)
+                    .map { it.selectedItem.toString() }
+                    .filter { it != "None" }
+                val trafficState = traffic.selectedItem.toString().takeUnless { it == "Unspecified" }
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            database.tripDao().annotateEvent(
+                                eventId = event.eventId,
+                                annotation = EventAnnotation(
+                                    primaryCauseCode = primary.selectedItem.toString(),
+                                    secondaryCauseCodes = secondaryCodes,
+                                    confidenceCode = confidence.selectedItem.toString().toInt(),
+                                    trafficState = trafficState,
+                                    notes = notes.text.toString().trim().takeIf { it.isNotEmpty() }
+                                )
+                            )
+                            database.tripDao().updateEventSourceLocationWithAudit(
+                                eventId = event.eventId,
+                                latitude = sourceLatitude.text.toString().trim().toDoubleOrNull(),
+                                longitude = sourceLongitude.text.toString().trim().toDoubleOrNull(),
+                                visible = sourceVisible.isChecked,
+                                reason = "event annotation review"
+                            )
+                        }
+                        loadTripDetails()
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Could not save event annotation", error)
+                        AlertDialog.Builder(this@TripDetailActivity)
+                            .setTitle("Annotation not saved")
+                            .setMessage(error.message ?: "Validation or database error")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                }
+            }
+            .show()
     }
 
     private fun bindSpeedChart(gpsData: List<TripData>) {
@@ -548,6 +724,10 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun confirmDelete() {
+        if (currentQaStatus != TripQaStatus.UNREVIEWED) {
+            Toast.makeText(this, "Reviewed research trips are retained; export before controlled deletion.", Toast.LENGTH_LONG).show()
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("Delete trip?")
             .setMessage("This will remove the trip record, photos, and all its stored data.")

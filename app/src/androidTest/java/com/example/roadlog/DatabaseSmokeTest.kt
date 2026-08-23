@@ -130,6 +130,82 @@ class DatabaseSmokeTest {
     }
 
     @Test
+    fun `repeated identical research metadata remains independent`() = runTest {
+        val trips = (1..3).map {
+            TestFixtures.tripA().copy(
+                tripUuid = "trip-$it",
+                sessionId = ResearchStudy.SESSION_ID,
+                corridorId = ResearchStudy.CORRIDOR_ID,
+                direction = ResearchDirection.A_TO_B,
+                observationPeriod = ObservationPeriod.MORNING,
+                studyDateLocal = "2024-07-17",
+                timeZoneId = ResearchTime.KATHMANDU_ZONE_ID
+            )
+        }
+        val ids = trips.map { db.tripDao().insertTrip(it) }
+        assertEquals(3, ids.toSet().size)
+        ids.forEachIndexed { index, id ->
+            db.tripDao().insertAll(TestFixtures.gpsPointsForTrip(id, trips[index].startTimeMs, trips[index].endTimeMs, 2))
+        }
+        ids.forEach { id ->
+            assertEquals(2, db.tripDao().getGpsForTrip(id, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS).size)
+        }
+    }
+
+    @Test
+    fun `annotation revisions preserve earlier values`() = runTest {
+        val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
+        val eventId = "event-1"
+        db.tripDao().insertEvents(listOf(TripEvent(eventId = eventId, tripId = tripId, markerTimeMs = TestFixtures.BASE_TIME_MS)))
+        db.tripDao().annotateEvent(
+            eventId,
+            EventAnnotation("SIG", listOf("BUS"), 2, "QUEUED")
+        )
+        db.tripDao().annotateEvent(
+            eventId,
+            EventAnnotation("QUE", emptyList(), 3, "DENSE_MOVING")
+        )
+        val revisions = db.tripDao().getAnnotationsForEvent(eventId)
+        assertEquals(2, revisions.size)
+        assertEquals("SIG", revisions[0].primaryCauseCode)
+        assertEquals("QUE", revisions[1].primaryCauseCode)
+        assertEquals("BUS", revisions[0].secondaryCause1)
+    }
+
+    @Test
+    fun `legacy trip zero rows do not contaminate normal trip queries`() = runTest {
+        val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
+        db.tripDao().insertAll(
+            listOf(
+                TripData(
+                    tripId = 0L,
+                    timestamp = TestFixtures.BASE_TIME_MS + 100,
+                    latitude = 1.0,
+                    longitude = 2.0,
+                    speedKmh = 10f,
+                    eventCause = null
+                ),
+                TripData(
+                    tripId = tripId,
+                    timestamp = TestFixtures.BASE_TIME_MS + 100,
+                    latitude = 3.0,
+                    longitude = 4.0,
+                    speedKmh = 20f,
+                    eventCause = null
+                )
+            )
+        )
+
+        val rows = db.tripDao().getGpsForTrip(
+            tripId,
+            TestFixtures.BASE_TIME_MS,
+            TestFixtures.BASE_TIME_MS + 1000
+        )
+        assertEquals(1, rows.size)
+        assertEquals(tripId, rows.single().tripId)
+    }
+
+    @Test
     fun `completed trips appear in history`() = runTest {
         db.tripDao().insertTrip(TestFixtures.tripA())
         db.tripDao().insertTrip(TestFixtures.tripB())
@@ -221,7 +297,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `abandoned drafts can be cleaned up`() = runTest {
+    fun `unfinished drafts are preserved for recovery`() = runTest {
         val draft1 = Trip(
             startTimeMs = TestFixtures.BASE_TIME_MS,
             endTimeMs = 0,
@@ -243,13 +319,21 @@ class DatabaseSmokeTest {
         val abandoned = db.tripDao().getAbandonedTrips()
         assertEquals(2, abandoned.size)
 
-        for (trip in abandoned) {
-            db.tripDao().deleteTripDataForTrip(trip.id)
-            db.tripDao().deleteTrip(trip.id)
+        abandoned.forEach { trip ->
+            db.tripDao().markTripInterrupted(
+                tripId = trip.id,
+                status = TripStatus.RECOVERABLE,
+                endTimeMs = TestFixtures.BASE_TIME_MS + 20_000,
+                endNanoTime = 20_000,
+                reason = "TEST_INTERRUPTION",
+                lastWriteTimeMs = TestFixtures.BASE_TIME_MS
+            )
         }
 
         assertEquals(0, db.tripDao().getAbandonedTrips().size)
-        assertEquals(0, db.tripDao().getAllTrips().size)
+        assertEquals(2, db.tripDao().getIncompleteTrips().size)
+        assertNotNull(db.tripDao().getTripById(id1))
+        assertNotNull(db.tripDao().getTripById(id2))
     }
 
     @Test
