@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
+import java.util.UUID
 
 object DebugSeeder {
 
@@ -18,8 +20,7 @@ object DebugSeeder {
         val distanceKm: Double,
         val eventCauses: List<Pair<Double, String>>,
         val gpsCount: Int,
-        val sensorCount: Int,
-        val photoCount: Int
+        val sensorCount: Int
     )
 
     val DEMO_TRIPS = listOf(
@@ -28,30 +29,27 @@ object DebugSeeder {
             startOffsetDays = 1,
             durationMinutes = 35,
             distanceKm = 12.3,
-            eventCauses = listOf(0.2 to "SIGNAL", 0.5 to "QUEUE", 0.8 to "ROUGHNESS"),
+            eventCauses = listOf(0.2 to "SIGNAL", 0.5 to "QUEUE", 0.8 to "ROUGH"),
             gpsCount = 500,
-            sensorCount = 5000,
-            photoCount = 3
+            sensorCount = 5000
         ),
         DemoTripDef(
             label = "Market Run",
             startOffsetDays = 2,
             durationMinutes = 22,
             distanceKm = 5.7,
-            eventCauses = listOf(0.3 to "MARKET", 0.6 to "PEDESTRIAN", 0.9 to "BUS"),
+            eventCauses = listOf(0.3 to "MARKET", 0.6 to "PED", 0.9 to "BUS"),
             gpsCount = 350,
-            sensorCount = 3500,
-            photoCount = 2
+            sensorCount = 3500
         ),
         DemoTripDef(
             label = "Dense Highway",
             startOffsetDays = 3,
             durationMinutes = 90,
             distanceKm = 85.0,
-            eventCauses = listOf(0.1 to "SIGNAL", 0.3 to "POTHOLE", 0.5 to "ROUGHNESS", 0.7 to "TURNING", 0.9 to "FRICTION"),
+            eventCauses = listOf(0.1 to "SIGNAL", 0.3 to "ROUGH", 0.5 to "ROUGH", 0.7 to "TURNING", 0.9 to "FRICTION"),
             gpsCount = 5000,
-            sensorCount = 30000,
-            photoCount = 5
+            sensorCount = 30000
         ),
         DemoTripDef(
             label = "Overlap A",
@@ -60,18 +58,16 @@ object DebugSeeder {
             distanceKm = 8.0,
             eventCauses = listOf(0.2 to "SIGNAL", 0.5 to "QUEUE", 0.8 to "BUS"),
             gpsCount = 200,
-            sensorCount = 2000,
-            photoCount = 1
+            sensorCount = 2000
         ),
         DemoTripDef(
             label = "Overlap B",
             startOffsetDays = 4,
             durationMinutes = 30,
             distanceKm = 4.5,
-            eventCauses = listOf(0.3 to "POTHOLE", 0.7 to "CONSTRUCTION"),
+            eventCauses = listOf(0.3 to "ROUGH", 0.7 to "CONSTRUCTION"),
             gpsCount = 150,
-            sensorCount = 1500,
-            photoCount = 1
+            sensorCount = 1500
         )
     )
 
@@ -87,7 +83,6 @@ object DebugSeeder {
 
     suspend fun seed(context: Context) {
         val db = AppDatabase.getDatabase(context)
-        val photoDir = File(context.filesDir, "demo_photos")
         val now = System.currentTimeMillis()
         val dayMs = 86_400_000L
 
@@ -109,7 +104,9 @@ object DebugSeeder {
                 accelPointCount = 0,
                 causeBreakdown = "{}",
                 createdAt = 0,
-                status = TripStatus.RECORDING
+                status = TripStatus.RECORDING,
+                tripUuid = "debug-${UUID.randomUUID()}",
+                notes = "DEBUG_SEED"
             )
             val tripId = withContext(Dispatchers.IO) { db.tripDao().insertTrip(trip) }
 
@@ -118,14 +115,9 @@ object DebugSeeder {
                 withContext(Dispatchers.IO) { db.tripDao().insertAll(chunk) }
             }
 
-            val photos = buildDemoPhotos(tripId, startMs, endMs, lat, lon, def.photoCount, photoDir)
-            photos.forEach { photo ->
-                val photoFile = File(photo.filePath)
-                photoFile.parentFile?.mkdirs()
-                if (!photoFile.exists()) {
-                    photoFile.writeBytes(JpegGenerator.bytes())
-                }
-                withContext(Dispatchers.IO) { db.tripDao().insertPhoto(photo) }
+            val events = buildDemoEvents(tripId, startMs, endMs, def)
+            events.chunked(100).forEach { chunk ->
+                withContext(Dispatchers.IO) { db.tripDao().insertEvents(chunk) }
             }
 
             val breakdown = org.json.JSONObject().apply {
@@ -148,41 +140,27 @@ object DebugSeeder {
         }
 
         File(context.filesDir, DEMO_MARKER_FILE).writeText(now.toString())
-        Log.i(TAG, "Seeded ${DEMO_TRIPS.size} demo trips with photos")
+        Log.i(TAG, "Seeded ${DEMO_TRIPS.size} demo trips")
     }
 
     suspend fun clear(context: Context) {
         val db = AppDatabase.getDatabase(context)
-        val photoDir = File(context.filesDir, "demo_photos")
         val markerFile = File(context.filesDir, DEMO_MARKER_FILE)
-
-        val allPhotos = withContext(Dispatchers.IO) {
-            db.tripDao().let { dao ->
-                val allTrips = dao.getAllTrips()
-                val allDemoPhotos = mutableListOf<TripPhoto>()
-                for (trip in allTrips) {
-                    allDemoPhotos.addAll(dao.getPhotosForTrip(trip.id))
-                }
-                // We're clearing ALL completed trips created via demo seeding.
-                // Only clear if the marker file exists to avoid accidental production wipe.
-                allDemoPhotos
-            }
-        }
-
-        for (photo in allPhotos) {
-            try { File(photo.filePath).delete() } catch (_: Exception) {}
+        if (!markerFile.exists()) {
+            Log.i(TAG, "No demo seed marker; refusing to clear trips")
+            return
         }
 
         withContext(Dispatchers.IO) {
-            val trips = db.tripDao().getAllTrips()
+            val trips = db.tripDao().getAllTripsForExport()
+                .filter { it.notes == "DEBUG_SEED" && it.tripUuid.startsWith("debug-") }
             for (trip in trips) {
-                db.tripDao().deleteTripCascade(trip.id)
+                db.tripDao().deleteTripWithMediaFiles(trip.id)
             }
         }
 
-        try { photoDir.deleteRecursively() } catch (_: Exception) {}
         try { markerFile.delete() } catch (_: Exception) {}
-        Log.i(TAG, "Cleared all ${allPhotos.size} demo photos and trips")
+        Log.i(TAG, "Cleared seeded demo trips")
     }
 
     fun isSeeded(context: Context): Boolean {
@@ -205,7 +183,11 @@ object DebugSeeder {
                     latitude = baseLat + kotlin.math.sin(i * 0.001) * 0.02,
                     longitude = baseLon + i * 0.0001,
                     speedKmh = 30f + (i % 15) * 2f,
-                    eventCause = null
+                    eventCause = null,
+                    provider = "gps",
+                    horizontalAccuracyMeters = 4f,
+                    speedValid = true,
+                    sourceType = "LOCATION"
                 )
             )
         }
@@ -220,7 +202,10 @@ object DebugSeeder {
                     accelY = kotlin.math.cos(i * 0.02).toFloat() * 0.15f,
                     accelZ = 9.8f + kotlin.math.sin(i * 0.03).toFloat() * 0.8f,
                     eventCause = null,
-                    rawTimestamp = t * 1_000_000L + i * 20_000L
+                    rawTimestamp = t * 1_000_000L + i * 20_000L,
+                    sensorType = android.hardware.Sensor.TYPE_ACCELEROMETER,
+                    sensorAccuracy = android.hardware.SensorManager.SENSOR_STATUS_ACCURACY_HIGH,
+                    sourceType = "ACCELEROMETER"
                 )
             )
         }
@@ -231,7 +216,8 @@ object DebugSeeder {
                 TripData(
                     tripId = tripId, timestamp = t,
                     latitude = null, longitude = null, speedKmh = null,
-                    eventCause = cause
+                    eventCause = cause,
+                    sourceType = "EVENT"
                 )
             )
         }
@@ -239,25 +225,23 @@ object DebugSeeder {
         return rows
     }
 
-    private fun buildDemoPhotos(
-        tripId: Long, startMs: Long, endMs: Long,
-        baseLat: Double, baseLon: Double,
-        count: Int, dir: File
-    ): List<TripPhoto> {
-        val photos = mutableListOf<TripPhoto>()
-        for (i in 0 until count) {
-            val t = startMs + ((i + 1).toLong() * (endMs - startMs)) / (count + 1)
-            val path = File(dir, "demo_${tripId}_$i.jpg").absolutePath
-            photos.add(
-                TripPhoto(
-                    tripId = tripId,
-                    timestamp = t,
-                    latitude = baseLat + i * 0.001,
-                    longitude = baseLon + i * 0.001,
-                    filePath = path
-                )
-            )
-        }
-        return photos
+    private fun buildDemoEvents(
+        tripId: Long,
+        startMs: Long,
+        endMs: Long,
+        def: DemoTripDef
+    ): List<TripEvent> = def.eventCauses.map { (fraction, cause) ->
+        val markerTimeMs = startMs + (fraction * (endMs - startMs)).toLong()
+        TripEvent(
+            eventId = "debug-${UUID.randomUUID()}",
+            tripId = tripId,
+            markerTimeMs = markerTimeMs,
+            provisionalCauseCode = cause,
+            primaryCauseCode = cause,
+            provenance = EventProvenance.VOICE_RECOGNIZED,
+            transcript = "log ${cause.lowercase(Locale.ROOT)}",
+            codebookVersion = ResearchCodebook.VERSION,
+            createdAt = markerTimeMs
+        )
     }
 }

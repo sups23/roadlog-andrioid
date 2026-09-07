@@ -83,13 +83,6 @@
             android:text="Ready to record"
             android:textSize="16sp" />
 
-        <LinearLayout
-            android:id="@+id/causeLabelsContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone" />
-
         <TextView
             android:id="@+id/lastSpokenText"
             android:layout_width="match_parent"
@@ -112,23 +105,13 @@
             android:textSize="16sp"
             android:textStyle="bold" />
 
-        <com.google.android.material.checkbox.MaterialCheckBox
-            android:id="@+id/cameraCheckBox"
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/camera_checkbox_label" />
-
-        <Button
-            android:id="@+id/takePhotoButton"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginTop="4dp"
-            android:backgroundTint="@color/teal_700"
-            android:text="@string/take_photo_now"
-            android:textColor="@android:color/white"
-            android:textSize="16sp"
-            android:visibility="gone" />
+            android:layout_marginBottom="8dp"
+            android:gravity="center"
+            android:text="During recording, say: log signal, log queue, log bus, log pedestrian, log roughness, log construction, log friction, log turning, log market, or log unknown."
+            android:textSize="13sp" />
 
         <Button
             android:id="@+id/stopButton"
@@ -159,13 +142,6 @@
                 android:id="@+id/mapView"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
-
-            <androidx.camera.view.PreviewView
-                android:id="@+id/previewView"
-                android:layout_width="1dp"
-                android:layout_height="1dp"
-                android:layout_gravity="top|start"
-                android:visibility="gone" />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fabRecenter"

@@ -13,51 +13,28 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
-import android.os.SystemClock
 import android.os.BatteryManager
 import android.os.StatFs
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowManager
 import android.widget.Button
-import android.widget.CheckBox
-import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.ArrayAdapter
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import java.io.File
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import android.location.LocationManager
 import android.hardware.SensorManager
 import android.widget.TextView
 import android.widget.Toast
 import android.util.Log
-import android.graphics.BitmapFactory
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
-import java.security.MessageDigest
-import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
 
@@ -69,12 +46,10 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.RECORD_AUDIO
     )
-    private val cameraPermission = Manifest.permission.CAMERA
 
     private val permissionRequestCode = 1001
     private val startupPermissionRequestCode = 1003
     private val batteryOptimizationRequestCode = 1002
-    private val cameraPermissionRequestCode = 1004
 
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
@@ -82,35 +57,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var modelStatusText: TextView
     private lateinit var lastSpokenText: TextView
-    private lateinit var causeLabels: Map<String, TextView>
     private lateinit var mapView: MapView
     private lateinit var locationOverlay: MyLocationNewOverlay
     private lateinit var pathOverlay: Polyline
     private lateinit var fabRecenter: FloatingActionButton
-    private lateinit var cameraCheckBox: CheckBox
-    private lateinit var previewView: PreviewView
-    private lateinit var takePhotoButton: Button
     private lateinit var directionSpinner: Spinner
     private lateinit var observationPeriodSpinner: Spinner
     private lateinit var studyDateText: TextView
     private lateinit var healthText: TextView
-    private lateinit var causeLabelsContainer: LinearLayout
 
-    private var imageCapture: ImageCapture? = null
-    private lateinit var cameraExecutor: ExecutorService
-    private var pendingStartAfterCameraPermission = false
     private var isRecording = false
     private var isPreparingRecording = false
     private var isFinalizingRecording = false
     private var activeTripId = -1L
-    private val photoPersistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var mapFollowUser = true
     private var lastHeardText = "—"
     private var lastMatchedCause = "—"
 
     private val handler = Handler(Looper.getMainLooper())
-    private val pendingHighlightResets = mutableMapOf<String, Runnable>()
     private val pathPoints = mutableListOf<GeoPoint>()
     private var lastMapPoint: GeoPoint? = null
     private var lastStatsPoint: GeoPoint? = null
@@ -126,8 +91,8 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Status received: $status")
             if (status.startsWith("cause:")) {
                 val cause = status.removePrefix("cause:")
-                highlightCause(cause)
                 lastMatchedCause = cause
+                statusText.text = "Voice event: $cause"
                 updateCauseHeardLine()
             } else {
                 statusText.text = status
@@ -165,24 +130,6 @@ class MainActivity : AppCompatActivity() {
                 lastSpeedKmh = speed
                 updateMapLocation(lat, lon)
                 updateStatsText(speed)
-            }
-        }
-    }
-
-    private val capturePhotoReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val lat = intent?.getDoubleExtra(LoggerService.EXTRA_LAT, 0.0) ?: 0.0
-            val lon = intent?.getDoubleExtra(LoggerService.EXTRA_LON, 0.0) ?: 0.0
-            val photoTime = intent?.getLongExtra(LoggerService.EXTRA_PHOTO_TIME, System.currentTimeMillis()) ?: System.currentTimeMillis()
-            val requestElapsedNanos = intent?.getLongExtra(LoggerService.EXTRA_REQUEST_ELAPSED_NANOS, 0L)?.takeIf { it > 0L }
-            val tripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, activeTripId) ?: activeTripId
-            val captureId = intent?.getStringExtra(LoggerService.EXTRA_CAPTURE_ID)
-            val eventId = intent?.getStringExtra(LoggerService.EXTRA_EVENT_ID)
-            Log.i(TAG, "Capture photo request received")
-            if (ContextCompat.checkSelfPermission(this@MainActivity, cameraPermission) == PackageManager.PERMISSION_GRANTED) {
-                takePhoto(lat, lon, photoTime, requestElapsedNanos, tripId, captureId, eventId)
-            } else {
-                Log.w(TAG, "Camera permission not granted, skipping photo")
             }
         }
     }
@@ -253,15 +200,10 @@ class MainActivity : AppCompatActivity() {
         modelStatusText = findViewById(R.id.modelStatusText)
         lastSpokenText = findViewById(R.id.lastSpokenText)
         fabRecenter = findViewById(R.id.fabRecenter)
-        cameraCheckBox = findViewById(R.id.cameraCheckBox)
-        previewView = findViewById(R.id.previewView)
-        takePhotoButton = findViewById(R.id.takePhotoButton)
         directionSpinner = findViewById(R.id.directionSpinner)
         observationPeriodSpinner = findViewById(R.id.observationPeriodSpinner)
         studyDateText = findViewById(R.id.studyDateText)
         healthText = findViewById(R.id.healthText)
-        causeLabelsContainer = findViewById(R.id.causeLabelsContainer)
-        cameraExecutor = Executors.newSingleThreadExecutor()
 
         directionSpinner.adapter = ArrayAdapter(
             this,
@@ -275,94 +217,6 @@ class MainActivity : AppCompatActivity() {
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         studyDateText.text = "Study date: ${ResearchClock.studyDateLocal(System.currentTimeMillis())} (${ResearchTime.KATHMANDU_ZONE_ID})"
         updatePreTripHealth()
-
-        cameraCheckBox.text = getString(R.string.camera_checkbox_label)
-        cameraCheckBox.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && ContextCompat.checkSelfPermission(this, cameraPermission) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(cameraPermission), cameraPermissionRequestCode)
-            }
-            if (isRecording) {
-                takePhotoButton.visibility = if (isChecked) View.VISIBLE else View.GONE
-            }
-            updatePreTripHealth()
-        }
-
-        takePhotoButton.setOnClickListener { captureManualPhoto() }
-
-        // Dynamically build cause labels from cause_config.json so the UI stays in
-        // sync with the configurable grammar and mapping.
-        val causeConfig = try {
-            CauseConfigLoader.load(this)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load cause config for UI", e)
-            CauseConfig(
-                confidenceThreshold = 0.6f,
-                fuzzyThreshold = 0.85,
-                minWordLength = 3,
-                activationPhrases = listOf("log"),
-                causes = emptyList()
-            )
-        }
-
-        Log.i(TAG, "Loaded ${causeConfig.causes.size} causes for UI: ${causeConfig.causes.map { it.code }}")
-
-        val labels = mutableMapOf<String, TextView>()
-        val displayMetrics = resources.displayMetrics
-        val labelHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 56f, displayMetrics).toInt()
-        val marginPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 4f, displayMetrics).toInt()
-        val columnCount = 3
-
-        causeConfig.causes.filterNot { it.voiceOnly }.chunked(columnCount).forEach { rowCauses ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                weightSum = columnCount.toFloat()
-            }
-
-            rowCauses.forEach { cause ->
-                val label = TextView(this).apply {
-                    id = View.generateViewId()
-                    text = cause.shortForm
-                    setTextAppearance(R.style.CauseLabel)
-                    gravity = Gravity.CENTER
-                    setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.gray))
-                    setTextColor(ContextCompat.getColor(this@MainActivity, android.R.color.white))
-                    isClickable = true
-                    isFocusable = true
-                    layoutParams = LinearLayout.LayoutParams(
-                        0,
-                        labelHeight,
-                        1f
-                    ).apply {
-                        setMargins(marginPx, marginPx * 2, marginPx, 0)
-                    }
-                    setOnClickListener {
-                        sendCauseToService(cause.code)
-                        highlightCause(cause.code)
-                        lastMatchedCause = cause.code
-                        updateCauseHeardLine()
-                    }
-                }
-                row.addView(label)
-                labels[cause.code] = label
-            }
-
-            // Fill remaining slots in the last row with invisible placeholders so weights line up.
-            repeat(columnCount - rowCauses.size) {
-                val placeholder = View(this).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, labelHeight, 1f).apply {
-                        setMargins(marginPx, marginPx * 2, marginPx, 0)
-                    }
-                }
-                row.addView(placeholder)
-            }
-
-            causeLabelsContainer.addView(row)
-        }
-        causeLabels = labels
 
         startButton.setOnClickListener { onStartClicked() }
         stopButton.setOnClickListener { onStopClicked() }
@@ -412,13 +266,6 @@ class MainActivity : AppCompatActivity() {
             this,
             locationReceiver,
             IntentFilter(LoggerService.ACTION_LOCATION_UPDATE),
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-
-        ContextCompat.registerReceiver(
-            this,
-            capturePhotoReceiver,
-            IntentFilter(LoggerService.ACTION_CAPTURE_PHOTO),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
@@ -481,14 +328,10 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(statusReceiver)
         unregisterReceiver(heardTextReceiver)
         unregisterReceiver(locationReceiver)
-        unregisterReceiver(capturePhotoReceiver)
         unregisterReceiver(tripSavedReceiver)
         unregisterReceiver(recordingStartedReceiver)
         unregisterReceiver(recordingStateReceiver)
         pendingStatusHide?.let { handler.removeCallbacks(it) }
-        if (::cameraExecutor.isInitialized) {
-            cameraExecutor.shutdown()
-        }
     }
 
     override fun onResume() {
@@ -636,11 +479,6 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, permissions, permissionRequestCode)
             return
         }
-        if (cameraCheckBox.isChecked && !hasCameraPermission()) {
-            pendingStartAfterCameraPermission = true
-            ActivityCompat.requestPermissions(this, arrayOf(cameraPermission), cameraPermissionRequestCode)
-            return
-        }
         startRecording()
     }
 
@@ -652,7 +490,6 @@ class MainActivity : AppCompatActivity() {
     private fun startRecording() {
         val intent = Intent(this, LoggerService::class.java).apply {
             action = LoggerService.ACTION_START
-            putExtra(LoggerService.EXTRA_ENABLE_CAMERA, cameraCheckBox.isChecked)
             putExtra(LoggerService.EXTRA_DIRECTION, selectedDirectionCode())
             putExtra(LoggerService.EXTRA_OBSERVATION_PERIOD, selectedObservationPeriodCode())
             putExtra(LoggerService.EXTRA_STUDY_DATE, ResearchClock.studyDateLocal(System.currentTimeMillis()))
@@ -672,10 +509,6 @@ class MainActivity : AppCompatActivity() {
         updateCauseHeardLine()
         clearMapPath()
         modelStatusText.text = "Preparing local trip record..."
-        if (cameraCheckBox.isChecked) {
-            setKeepScreenOn()
-            bindCameraIfEnabled()
-        }
     }
 
     private fun stopRecording() {
@@ -686,8 +519,6 @@ class MainActivity : AppCompatActivity() {
         isPreparingRecording = false
         isFinalizingRecording = true
         updateUiState(isRecording = true)
-        clearKeepScreenOn()
-        unbindCamera()
         pendingStatusHide?.let { handler.removeCallbacks(it) }
         statusText.text = "Stopping and saving..."
         statusText.visibility = View.VISIBLE
@@ -757,14 +588,12 @@ class MainActivity : AppCompatActivity() {
             val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
             if (level >= 0 && scale > 0) level * 100 / scale else null
         }
-        val cameraReady = !cameraCheckBox.isChecked || hasCameraPermission()
         val checks = listOf(
             "GPS" to locationReady,
             "mic" to microphoneReady,
             "accel" to accelerometerReady,
             "gyro" to gyroscopeReady,
-            "orientation" to orientationReady,
-            "camera" to cameraReady
+            "orientation" to orientationReady
         )
         val missing = checks.filterNot { it.second }.map { it.first }
         healthText.text = "Pre-trip check: ${if (missing.isEmpty()) "READY" else "WARN ${missing.joinToString()}"} · Storage %.0f MB · Battery %s".format(
@@ -801,22 +630,6 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "Permissions required to record trip", Toast.LENGTH_LONG).show()
                 }
             }
-            cameraPermissionRequestCode -> {
-                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    if (cameraCheckBox.isChecked) {
-                        bindCameraIfEnabled()
-                    }
-                    updatePreTripHealth()
-                    if (pendingStartAfterCameraPermission) {
-                        pendingStartAfterCameraPermission = false
-                        startRecording()
-                    }
-                } else {
-                    pendingStartAfterCameraPermission = false
-                    cameraCheckBox.isChecked = false
-                    Toast.makeText(this, "Camera permission is required to capture bump photos", Toast.LENGTH_LONG).show()
-                }
-            }
         }
     }
 
@@ -841,17 +654,10 @@ class MainActivity : AppCompatActivity() {
         this.isRecording = isRecording
         startButton.isEnabled = !isRecording && !isFinalizingRecording
         stopButton.isEnabled = isRecording && !isFinalizingRecording
-        cameraCheckBox.isEnabled = !isRecording
         lastSpokenText.visibility = if (isRecording) View.VISIBLE else View.GONE
         modelStatusText.visibility = if (isRecording) View.VISIBLE else View.GONE
-        takePhotoButton.visibility = if (isRecording && !isFinalizingRecording && cameraCheckBox.isChecked) View.VISIBLE else View.GONE
         directionSpinner.isEnabled = !isRecording && !isFinalizingRecording
         observationPeriodSpinner.isEnabled = !isRecording && !isFinalizingRecording
-        causeLabelsContainer.visibility = if (isRecording && !isPreparingRecording && !isFinalizingRecording) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
         if (isRecording) {
             statusText.visibility = View.VISIBLE
             statusText.text = if (isFinalizingRecording) {
@@ -884,200 +690,5 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateCauseHeardLine() {
         lastSpokenText.text = "Heard: $lastHeardText | Last: $lastMatchedCause"
-    }
-
-    private fun highlightCause(cause: String) {
-        val label = causeLabels[cause] ?: return
-
-        // Cancel any pending reset for this cause so rapid repeats don't get cut off
-        pendingHighlightResets[cause]?.let { handler.removeCallbacks(it) }
-
-        label.setBackgroundColor(ContextCompat.getColor(this, android.R.color.holo_green_dark))
-
-        val resetRunnable = Runnable {
-            label.setBackgroundColor(ContextCompat.getColor(this, R.color.gray))
-            pendingHighlightResets.remove(cause)
-        }
-        pendingHighlightResets[cause] = resetRunnable
-        handler.postDelayed(resetRunnable, 500)
-    }
-
-    private fun sendCauseToService(causeCode: String) {
-        val intent = Intent(this, LoggerService::class.java).apply {
-            action = LoggerService.ACTION_CAUSE_SELECTED
-            putExtra(LoggerService.EXTRA_CAUSE_CODE, causeCode)
-        }
-        startService(intent)
-    }
-
-    private fun hasCameraPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(this, cameraPermission) == PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun bindCameraIfEnabled() {
-        if (!cameraCheckBox.isChecked || !hasCameraPermission()) return
-        previewView.visibility = View.INVISIBLE
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener({
-            val cameraProvider = try {
-                providerFuture.get()
-            } catch (e: Exception) {
-                Log.e(TAG, "Camera provider unavailable", e)
-                return@addListener
-            }
-            val preview = Preview.Builder()
-                .build()
-                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .build()
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
-                Log.i(TAG, "Camera bound")
-            } catch (e: Exception) {
-                Log.e(TAG, "Camera binding failed", e)
-            }
-        }, ContextCompat.getMainExecutor(this))
-    }
-
-    private fun unbindCamera() {
-        val providerFuture = ProcessCameraProvider.getInstance(this)
-        providerFuture.addListener({
-            try {
-                providerFuture.get().unbindAll()
-            } catch (e: Exception) {
-                Log.e(TAG, "Camera unbind failed", e)
-            }
-            imageCapture = null
-            previewView.visibility = View.GONE
-        }, ContextCompat.getMainExecutor(this))
-    }
-
-    private fun captureManualPhoto() {
-        val point = lastMapPoint ?: getLastKnownLocation()
-        val lat = point?.latitude ?: 0.0
-        val lon = point?.longitude ?: 0.0
-        Log.i(TAG, "Manual photo requested")
-        takePhoto(lat, lon, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos(), activeTripId, null, null)
-    }
-
-    private fun takePhoto(
-        lat: Double,
-        lon: Double,
-        timestamp: Long,
-        requestElapsedRealtimeNanos: Long?,
-        tripId: Long,
-        captureId: String?,
-        eventId: String?
-    ) {
-        val capture = imageCapture ?: run {
-            Log.w(TAG, "takePhoto skipped: imageCapture not ready")
-            Toast.makeText(this, "Camera not ready yet", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val ownedTripId = if (tripId >= 0L) tripId else activeTripId
-        if (ownedTripId < 0L) {
-            Log.w(TAG, "Photo request has no active durable trip")
-            return
-        }
-        val stableCaptureId = captureId ?: UUID.randomUUID().toString()
-        val photosDir = File(filesDir, "photos").apply { mkdirs() }
-        val file = File(photosDir, "capture_${stableCaptureId}.jpg")
-
-        // A pending media row is created before requesting the asynchronous camera
-        // operation. Delayed callbacks therefore have a stable owner.
-        photoPersistenceScope.launch {
-            val db = AppDatabase.getDatabase(applicationContext)
-            if (db.tripDao().getPhotoByCaptureId(stableCaptureId) == null) {
-                db.tripDao().insertPhoto(
-                    TripPhoto(
-                        tripId = ownedTripId,
-                        timestamp = timestamp,
-                        latitude = lat.takeIf { it != 0.0 },
-                        longitude = lon.takeIf { it != 0.0 },
-                        filePath = "",
-                        captureId = stableCaptureId,
-                        eventId = eventId,
-                        requestTimeMs = timestamp,
-                        requestElapsedRealtimeNanos = requestElapsedRealtimeNanos,
-                        mimeType = "image/jpeg",
-                        usabilityStatus = "PENDING",
-                        privacyStatus = "UNREVIEWED"
-                    )
-                )
-            }
-            withContext(Dispatchers.Main) {
-                val options = ImageCapture.OutputFileOptions.Builder(file).build()
-                capture.takePicture(
-                    options,
-                    cameraExecutor,
-                    object : ImageCapture.OnImageSavedCallback {
-                        override fun onError(exc: ImageCaptureException) {
-                            Log.e(TAG, "Photo capture failed", exc)
-                            photoPersistenceScope.launch {
-                                db.tripDao().completePhoto(
-                                    captureId = stableCaptureId,
-                                    filePath = "",
-                                    captureTimeMs = System.currentTimeMillis(),
-                                    captureElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos(),
-                                    fileSizeBytes = 0L,
-                                    sha256 = null,
-                                    width = null,
-                                    height = null,
-                                    usabilityStatus = "FAILED"
-                                )
-                            }
-                        }
-
-                        override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                            Log.i(TAG, "Photo saved for trip=$ownedTripId")
-                            photoPersistenceScope.launch {
-                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                                BitmapFactory.decodeFile(file.absolutePath, bounds)
-                                db.tripDao().completePhoto(
-                                    captureId = stableCaptureId,
-                                    filePath = file.absolutePath,
-                                    captureTimeMs = System.currentTimeMillis(),
-                                    captureElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos(),
-                                    fileSizeBytes = file.length(),
-                                    sha256 = sha256(file),
-                                    width = bounds.outWidth.takeIf { it > 0 },
-                                    height = bounds.outHeight.takeIf { it > 0 },
-                                    usabilityStatus = "UNREVIEWED"
-                                )
-                            }
-                        }
-                    }
-                )
-            }
-        }
-    }
-
-    private fun sha256(file: File): String? {
-        return try {
-            val digest = MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count <= 0) break
-                    digest.update(buffer, 0, count)
-                }
-            }
-            digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not checksum photo", e)
-            null
-        }
-    }
-
-    private fun clearKeepScreenOn() {
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-    }
-
-    private fun setKeepScreenOn() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }
