@@ -15,13 +15,21 @@
         app:titleTextColor="@android:color/white" />
 
     <Button
-        android:id="@+id/exportAllButton"
+        android:id="@+id/exportRestrictedButton"
         android:layout_width="match_parent"
         android:layout_height="52dp"
         android:layout_margin="12dp"
         android:backgroundTint="@color/teal_700"
-        android:text="Export all collected data"
+        android:text="Export RESTRICTED_RAW data"
         android:textColor="@android:color/white" />
+
+    <Button
+        android:id="@+id/exportPublicButton"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:text="Export PUBLIC_DEIDENTIFIED data" />
 
     <Button
         android:id="@+id/reviewIncompleteButton"

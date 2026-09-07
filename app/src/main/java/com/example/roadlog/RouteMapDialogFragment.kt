@@ -17,6 +17,10 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.DialogFragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.sqrt
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -28,15 +32,16 @@ class RouteMapDialogFragment : DialogFragment() {
 
     companion object {
         private const val TAG = "RoadLog"
-        private var pendingGpsData: List<TripData>? = null
         private var pendingWorldAccel: List<WorldAccelSample>? = null
         private var pendingWorldGyro: List<WorldGyroSample>? = null
+        private const val ARG_TRIP_ID = "trip_id"
 
-        fun show(activity: AppCompatActivity, gpsData: List<TripData>, worldAccel: List<WorldAccelSample>, worldGyro: List<WorldGyroSample>) {
-            pendingGpsData = gpsData
+        fun show(activity: AppCompatActivity, tripId: Long, worldAccel: List<WorldAccelSample>, worldGyro: List<WorldGyroSample>) {
             pendingWorldAccel = worldAccel
             pendingWorldGyro = worldGyro
-            RouteMapDialogFragment().show(activity.supportFragmentManager, "route_map")
+            RouteMapDialogFragment().apply {
+                arguments = Bundle().apply { putLong(ARG_TRIP_ID, tripId) }
+            }.show(activity.supportFragmentManager, "route_map")
         }
     }
 
@@ -190,28 +195,31 @@ class RouteMapDialogFragment : DialogFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        val restored = savedInstanceState?.let { state ->
-            this.gpsData = emptyList()
-            this.worldAccel = emptyList()
-            this.worldGyro = emptyList()
-            true
-        } ?: run {
-            gpsData = pendingGpsData ?: emptyList()
-            worldAccel = pendingWorldAccel ?: emptyList()
-            worldGyro = pendingWorldGyro ?: emptyList()
-            pendingGpsData = null
-            pendingWorldAccel = null
-            pendingWorldGyro = null
-            false
+        worldAccel = pendingWorldAccel ?: emptyList()
+        worldGyro = pendingWorldGyro ?: emptyList()
+        pendingWorldAccel = null
+        pendingWorldGyro = null
+        val tripId = requireArguments().getLong(ARG_TRIP_ID)
+        lifecycleScope.launch {
+            gpsData = withContext(Dispatchers.IO) {
+                AppDatabase.getDatabase(requireContext()).tripDao().getGpsForMap(tripId)
+            }
+            geoPoints = gpsData.map { GeoPoint(it.latitude!!, it.longitude!!) }
+            if (geoPoints.isEmpty()) {
+                Log.w(TAG, "No valid GPS points for trip $tripId")
+                TextView(requireContext()).apply {
+                    text = "No GPS route was recorded for this trip"
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.argb(190, 0, 0, 0))
+                    setPadding(32, 20, 32, 20)
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { gravity = Gravity.CENTER }
+                }.also { (view as ViewGroup).addView(it) }
+            }
+            selectParameter("")
         }
-        geoPoints = gpsData.filter { it.latitude != null && it.longitude != null }
-            .map { GeoPoint(it.latitude!!, it.longitude!!) }
-        // Also filter gpsData to match geoPoints so segment indices align.
-        gpsData = gpsData.filter { it.latitude != null && it.longitude != null }
-        if (geoPoints.isEmpty() && !restored) {
-            Log.w(TAG, "RouteMapDialogFragment: no valid GPS points to display")
-        }
-        selectParameter("")
     }
 
     private fun selectParameter(param: String) {
@@ -374,7 +382,6 @@ class RouteMapDialogFragment : DialogFragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        pendingGpsData = null
         pendingWorldAccel = null
         pendingWorldGyro = null
     }

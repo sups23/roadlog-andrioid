@@ -13,13 +13,13 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
-import java.io.File
 
 class TripHistoryActivity : AppCompatActivity() {
 
     private lateinit var recyclerView: RecyclerView
     private lateinit var emptyText: TextView
-    private lateinit var exportAllButton: Button
+    private lateinit var exportRestrictedButton: Button
+    private lateinit var exportPublicButton: Button
     private lateinit var reviewIncompleteButton: Button
     private lateinit var adapter: TripAdapter
     private lateinit var database: AppDatabase
@@ -27,6 +27,7 @@ class TripHistoryActivity : AppCompatActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val exportRequestCode = 4101
     private var exportIncludeIncomplete = false
+    private var exportMode = ResearchExportMode.RESTRICTED_RAW
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,14 +38,13 @@ class TripHistoryActivity : AppCompatActivity() {
 
         recyclerView = findViewById(R.id.tripsRecyclerView)
         emptyText = findViewById(R.id.emptyText)
-        exportAllButton = findViewById(R.id.exportAllButton)
+        exportRestrictedButton = findViewById(R.id.exportRestrictedButton)
+        exportPublicButton = findViewById(R.id.exportPublicButton)
         reviewIncompleteButton = findViewById(R.id.reviewIncompleteButton)
         database = AppDatabase.getDatabase(this)
 
-        exportAllButton.setOnClickListener {
-            exportIncludeIncomplete = false
-            openExportDocument()
-        }
+        exportRestrictedButton.setOnClickListener { beginExport(ResearchExportMode.RESTRICTED_RAW, false) }
+        exportPublicButton.setOnClickListener { beginExport(ResearchExportMode.PUBLIC_DEIDENTIFIED, false) }
         reviewIncompleteButton.setOnClickListener {
             scope.launch {
                 val incomplete = withContext(Dispatchers.IO) { database.tripDao().getIncompleteTrips() }
@@ -60,7 +60,7 @@ class TripHistoryActivity : AppCompatActivity() {
                     .setItems(labels) { _, which -> openTrip(incomplete[which]) }
                     .setPositiveButton("Export including them") { _, _ ->
                         exportIncludeIncomplete = true
-                        openExportDocument()
+                        chooseExportMode(includeIncomplete = true)
                     }
                     .setNegativeButton("Close", null)
                     .show()
@@ -77,11 +77,34 @@ class TripHistoryActivity : AppCompatActivity() {
         attachSwipeToDelete()
     }
 
+    private fun beginExport(mode: ResearchExportMode, includeIncomplete: Boolean) {
+        exportMode = mode
+        exportIncludeIncomplete = includeIncomplete
+        openExportDocument()
+    }
+
+    private fun chooseExportMode(includeIncomplete: Boolean) {
+        val labels = arrayOf(
+            "${ResearchExportMode.RESTRICTED_RAW.archiveLabel}: raw GPS, audio, device metadata",
+            "${ResearchExportMode.PUBLIC_DEIDENTIFIED.archiveLabel}: de-identified, no raw GPS/audio"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Choose export mode")
+            .setItems(labels) { _, which ->
+                beginExport(
+                    if (which == 0) ResearchExportMode.RESTRICTED_RAW else ResearchExportMode.PUBLIC_DEIDENTIFIED,
+                    includeIncomplete
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun openExportDocument() {
         startActivityForResult(
             Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 type = "application/zip"
-                putExtra(Intent.EXTRA_TITLE, "roadlog-research-export.zip")
+                putExtra(Intent.EXTRA_TITLE, exportMode.defaultFileName)
                 addCategory(Intent.CATEGORY_OPENABLE)
             },
             exportRequestCode
@@ -98,26 +121,29 @@ class TripHistoryActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != exportRequestCode || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        exportAllButton.isEnabled = false
+        exportRestrictedButton.isEnabled = false
+        exportPublicButton.isEnabled = false
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     ResearchExporter.exportToUri(
                         context = this@TripHistoryActivity,
                         destination = uri,
-                        includeIncomplete = exportIncludeIncomplete
+                        includeIncomplete = exportIncludeIncomplete,
+                        mode = exportMode
                     )
                 }
                 Toast.makeText(
                     this@TripHistoryActivity,
-                    "Exported ${result.tripCount} trips, ${result.eventCount} events, ${result.audioCount} audio segments",
+                    "${result.mode.archiveLabel} exported: ${result.tripCount} trips, ${result.eventCount} events",
                     Toast.LENGTH_LONG
                 ).show()
             } catch (e: Exception) {
                 Log.e("RoadLog", "Research export failed", e)
                 Toast.makeText(this@TripHistoryActivity, "Export failed; collected data was unchanged", Toast.LENGTH_LONG).show()
             } finally {
-                exportAllButton.isEnabled = true
+                exportRestrictedButton.isEnabled = true
+                exportPublicButton.isEnabled = true
             }
         }
     }
@@ -166,7 +192,7 @@ class TripHistoryActivity : AppCompatActivity() {
 
                 AlertDialog.Builder(this@TripHistoryActivity)
                     .setTitle("Delete trip?")
-                    .setMessage("This will remove the trip record, photos, and all its stored data.")
+                    .setMessage("This removes the trip record, audio, legacy photos, and all its stored data.")
                     .setPositiveButton("Delete") { _, _ ->
                         deleteTrip(trip)
                     }
@@ -185,16 +211,15 @@ class TripHistoryActivity : AppCompatActivity() {
 
     private fun deleteTrip(trip: Trip) {
         scope.launch {
-            withContext(Dispatchers.IO) {
-                val photos = database.tripDao().getPhotosForTrip(trip.id)
-                for (photo in photos) {
-                    try {
-                        File(photo.filePath).delete()
-                    } catch (e: Exception) {
-                        Log.e("RoadLog", "Failed to delete photo ${photo.filePath}", e)
-                    }
-                }
-                database.tripDao().deleteTripCascade(trip.id)
+            val report = withContext(Dispatchers.IO) {
+                database.tripDao().deleteTripWithMediaFiles(trip.id)
+            }
+            if (!report.isComplete || report.missingFiles > 0) {
+                Toast.makeText(
+                    this@TripHistoryActivity,
+                    "Trip deleted; media cleanup: ${report.deletedFiles} removed, ${report.missingFiles} missing, ${report.failures.size} failed",
+                    Toast.LENGTH_LONG
+                ).show()
             }
             loadTrips()
         }

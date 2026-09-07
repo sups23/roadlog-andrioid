@@ -52,10 +52,11 @@ class TripAdapter(
             researchText.text = listOfNotNull(
                 trip.studyDateLocal,
                 trip.direction,
-                trip.observationPeriod,
-                "QA: ${trip.qaStatus}",
-                if (trip.partialTraversal) "PARTIAL" else null
-            ).joinToString(" · ")
+                 trip.observationPeriod,
+                 "QA: ${trip.qaStatus}",
+                 if (trip.partialTraversal) "PARTIAL" else null,
+                 trip.exclusionCode?.let { "EXCLUDED: $it" }
+             ).joinToString(" · ")
             durationText.text = formatDuration(trip.startTimeMs, trip.endTimeMs)
             distanceText.text = formatDistance(trip.distanceMeters)
             eventsText.text = "${trip.eventCount} events"

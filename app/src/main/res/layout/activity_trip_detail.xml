@@ -114,7 +114,20 @@
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
                             android:text="Invalid" />
-                    </LinearLayout>
+                     </LinearLayout>
+
+                    <CheckBox
+                        android:id="@+id/incidentExclusionCheckBox"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="Exclude from analysis: incident or breakdown" />
+
+                    <Button
+                        android:id="@+id/saveExclusionButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Save exclusion decision" />
                 </LinearLayout>
             </androidx.cardview.widget.CardView>
 
@@ -154,6 +167,156 @@
                 android:layout_marginBottom="12dp"
                 android:text="View Route on Map"
                 android:textSize="16sp" />
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                app:cardCornerRadius="8dp"
+                app:cardElevation="4dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Audio Recordings"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <LinearLayout
+                        android:id="@+id/audioContainer"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="vertical">
+
+                        <LinearLayout
+                            android:id="@+id/audioControlsContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/audioNowPlayingText"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="Select a segment to play"
+                                android:textStyle="bold" />
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="4dp"
+                                android:gravity="center_vertical"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:id="@+id/audioElapsedText"
+                                    android:layout_width="48dp"
+                                    android:layout_height="wrap_content"
+                                    android:gravity="start"
+                                    android:text="00:00"
+                                    android:textSize="12sp" />
+
+                                <SeekBar
+                                    android:id="@+id/audioProgressSeekBar"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:contentDescription="Audio progress"
+                                    android:max="100"
+                                    android:progress="0" />
+
+                                <TextView
+                                    android:id="@+id/audioDurationText"
+                                    android:layout_width="48dp"
+                                    android:layout_height="wrap_content"
+                                    android:gravity="end"
+                                    android:text="00:00"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="4dp"
+                                android:orientation="horizontal">
+
+                                <Button
+                                    android:id="@+id/audioPreviousButton"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:minWidth="0dp"
+                                    android:text="Previous"
+                                    android:textSize="12sp" />
+
+                                <Button
+                                    android:id="@+id/audioPlayPauseButton"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:minWidth="0dp"
+                                    android:text="Play"
+                                    android:textSize="12sp" />
+
+                                <Button
+                                    android:id="@+id/audioNextButton"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:minWidth="0dp"
+                                    android:text="Next"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal">
+
+                                <Button
+                                    android:id="@+id/audioRewindButton"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:minWidth="0dp"
+                                    android:text="-10 sec"
+                                    android:textSize="12sp" />
+
+                                <Button
+                                    android:id="@+id/audioForwardButton"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:minWidth="0dp"
+                                    android:text="+10 sec"
+                                    android:textSize="12sp" />
+                            </LinearLayout>
+
+                            <Button
+                                android:id="@+id/audioPlayAllButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="4dp"
+                                android:text="Play all segments" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/audioSegmentsContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
 
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"
