@@ -115,6 +115,7 @@ class LoggerService : Service() {
     private var configuredObservationPeriod: String? = null
     private var configuredDeviceId: String? = null
     private var configuredStudyDate: String? = null
+    private var audioFailureInjection = AudioFailureInjectionPoint.NONE
     private val sensorProfileVersion = "1"
     private var recoveryJob: Job? = null
     private val sensorRegistrationJobs = mutableListOf<Job>()
@@ -414,6 +415,7 @@ class LoggerService : Service() {
                 if (validation.isNotEmpty()) {
                     broadcastStatus("Cannot start: ${validation.joinToString(", ")}")
                 } else {
+                    audioFailureInjection = AudioFailureInjectionConfig.consumeNext(this)
                     startRecording()
                 }
             }
@@ -1352,7 +1354,8 @@ class LoggerService : Service() {
             onFailure = { reason ->
                 audioFrameFailureCount++
                 Log.e(TAG, "Archival audio failure: $reason")
-            }
+            },
+            failureInjection = audioFailureInjection
         ).also {
             it.start(startTimeMs, startNanoTime)
             tripAudioRecorder = it

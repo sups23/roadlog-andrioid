@@ -25,7 +25,8 @@ class TripAudioRecorder(
     private val onSegmentStarted: (AudioSegmentInfo) -> Unit,
     private val onSegmentCompleted: (AudioSegmentInfo, Long, Long, String, String?, String?) -> Unit,
     private val segmentDurationMs: Long = 5 * 60 * 1000L,
-    private val onFailure: (String) -> Unit = {}
+    private val onFailure: (String) -> Unit = {},
+    failureInjection: AudioFailureInjectionPoint = AudioFailureInjectionPoint.NONE
 ) : VoskSpeechRecognizer.AudioFrameListener {
     companion object {
         private const val SAMPLE_RATE_HZ = 16_000
@@ -41,6 +42,7 @@ class TripAudioRecorder(
     private var nextSequence = 0
     private var running = false
     private var encodedSampleCount = 0
+    private val failureInjector = AudioFailureInjector(failureInjection)
 
     @Synchronized
     fun start(startTimeMs: Long, startElapsedRealtimeNanos: Long) {
@@ -68,6 +70,7 @@ class TripAudioRecorder(
                 segment = activeSegment ?: return
             }
             try {
+                failureInjector.maybeFail(AudioFailureInjectionPoint.FRAME_PROCESSING)
                 queue(samples, length, elapsedRealtimeNanos)
                 drain(endOfStream = false)
             } catch (error: Exception) {
@@ -121,6 +124,7 @@ class TripAudioRecorder(
 
         if (codec != null) {
             try {
+                failureInjector.maybeFail(AudioFailureInjectionPoint.SEGMENT_FINALIZATION)
                 drain(endOfStream = true)
             } catch (error: Exception) {
                 addFailure(
@@ -192,6 +196,7 @@ class TripAudioRecorder(
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, SAMPLE_RATE_HZ / 5 * 2)
         }
         try {
+            failureInjector.maybeFail(AudioFailureInjectionPoint.ENCODER_INITIALIZATION)
             codec = MediaCodec.createEncoderByType("audio/mp4a-latm").also {
                 it.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 it.start()

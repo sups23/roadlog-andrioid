@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +53,32 @@ class DebugInitProvider : ContentProvider() {
                             Toast.makeText(activity, "Demo data cleared", Toast.LENGTH_SHORT).show()
                             activity.loadTrips()
                         }
+                    }
+                    activity.findViewById<Button>(R.id.configureAudioFailureButton)?.setOnClickListener {
+                        val points = arrayOf(
+                            "Clear injection",
+                            "Fail encoder initialization",
+                            "Fail archival frame processing",
+                            "Fail segment finalization"
+                        )
+                        AlertDialog.Builder(activity)
+                            .setTitle("Inject on next trip")
+                            .setItems(points) { _, which ->
+                                val point = when (which) {
+                                    1 -> AudioFailureInjectionPoint.ENCODER_INITIALIZATION
+                                    2 -> AudioFailureInjectionPoint.FRAME_PROCESSING
+                                    3 -> AudioFailureInjectionPoint.SEGMENT_FINALIZATION
+                                    else -> AudioFailureInjectionPoint.NONE
+                                }
+                                AudioFailureInjectionConfig.setNext(activity, point)
+                                val message = if (point == AudioFailureInjectionPoint.NONE) {
+                                    "Audio failure injection cleared"
+                                } else {
+                                    "Next trip will fail at ${point.name.lowercase().replace('_', ' ')}"
+                                }
+                                Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
+                            }
+                            .show()
                     }
                 }
             }
