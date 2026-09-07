@@ -71,6 +71,11 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var contentScrollView: ScrollView
     private lateinit var loadingProgressBar: ProgressBar
     private lateinit var loadingStatusText: TextView
+    private lateinit var detailContextOriginalText: TextView
+    private lateinit var detailRouteDiversionSwitch: android.widget.Switch
+    private lateinit var detailNonTrafficStopSpinner: Spinner
+    private lateinit var detailContextNoteEditText: EditText
+    private lateinit var saveContextCorrectionButton: Button
     private lateinit var audioControlsContainer: LinearLayout
     private lateinit var audioSegmentsContainer: LinearLayout
     private lateinit var audioNowPlayingText: TextView
@@ -154,6 +159,16 @@ class TripDetailActivity : AppCompatActivity() {
         contentScrollView = findViewById(R.id.contentScrollView)
         loadingProgressBar = findViewById(R.id.loadingProgressBar)
         loadingStatusText = findViewById(R.id.loadingStatusText)
+        detailContextOriginalText = findViewById(R.id.detailContextOriginalText)
+        detailRouteDiversionSwitch = findViewById(R.id.detailRouteDiversionSwitch)
+        detailNonTrafficStopSpinner = findViewById(R.id.detailNonTrafficStopSpinner)
+        detailContextNoteEditText = findViewById(R.id.detailContextNoteEditText)
+        saveContextCorrectionButton = findViewById(R.id.saveContextCorrectionButton)
+        detailNonTrafficStopSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            NonTrafficStop.values
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         audioControlsContainer = findViewById(R.id.audioControlsContainer)
         audioSegmentsContainer = findViewById(R.id.audioSegmentsContainer)
         audioNowPlayingText = findViewById(R.id.audioNowPlayingText)
@@ -179,6 +194,7 @@ class TripDetailActivity : AppCompatActivity() {
         qaWarningsButton.setOnClickListener { updateQaStatus(TripQaStatus.VALID_WITH_WARNINGS) }
         qaInvalidButton.setOnClickListener { updateQaStatus(TripQaStatus.INVALID) }
         saveExclusionButton.setOnClickListener { saveExclusionDecision() }
+        saveContextCorrectionButton.setOnClickListener { saveContextCorrection() }
         setupAudioControls()
         showLoading(true)
 
@@ -276,6 +292,9 @@ class TripDetailActivity : AppCompatActivity() {
                 val quality = withContext(Dispatchers.IO) {
                     database.tripDao().getAllTripQuality().firstOrNull { it.tripId == tripId }
                 }
+                val auditRevisions = withContext(Dispatchers.IO) {
+                    database.tripDao().getAuditRevisionsForTrip(tripId)
+                }
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rot=${rotationData.size}, photos=${photos.size}")
                 ensureActive()
 
@@ -291,7 +310,7 @@ class TripDetailActivity : AppCompatActivity() {
                 ensureActive()
 
                 setStatus("Preparing charts...")
-                bindHeader(trip, gpsData, quality)
+                bindHeader(trip, gpsData, quality, auditRevisions)
                 bindBreakdown(trip.causeBreakdown)
                 bindTimeline(events, trip.startTimeMs)
                 bindSpeedChart(gpsData)
@@ -743,7 +762,12 @@ class TripDetailActivity : AppCompatActivity() {
         }
     }
 
-    private fun bindHeader(trip: Trip, gpsData: List<TripData>, quality: TripQuality?) {
+    private fun bindHeader(
+        trip: Trip,
+        gpsData: List<TripData>,
+        quality: TripQuality?,
+        auditRevisions: List<AuditRevision>
+    ) {
         Log.d(TAG, "bindHeader: gps=${gpsData.size}")
         dateText.text = dateFormatter.format(Date(trip.startTimeMs))
         researchText.text = listOfNotNull(
@@ -751,6 +775,9 @@ class TripDetailActivity : AppCompatActivity() {
             "Study corridor: ${trip.corridorId}",
             "Direction: ${trip.direction ?: "unknown"}",
             "Period: ${trip.observationPeriod ?: "unknown"}",
+            "Driver: ${trip.driverId ?: "not collected"}",
+            "Vehicle: ${listOfNotNull(trip.vehicleType, trip.vehicleMake, trip.vehicleModel, trip.vehicleYear).joinToString(" ").ifBlank { "not collected" }}",
+            "Weather: ${trip.weather ?: "not collected"} · Road wetness: ${trip.roadWetness ?: "not collected"}",
             "QA: ${trip.qaStatus}",
             quality?.let { qualityRecord ->
                 val warnings = runCatching {
@@ -789,6 +816,53 @@ class TripDetailActivity : AppCompatActivity() {
         eventsText.text = "Events: ${trip.eventCount}"
         qaActionsContainer.visibility = if (trip.qaStatus == TripQaStatus.UNREVIEWED) View.VISIBLE else View.GONE
         incidentExclusionCheckBox.isChecked = trip.exclusionCode == TripExclusion.INCIDENT_OR_BREAKDOWN
+        val latestCorrection = auditRevisions.lastOrNull { it.revisionType == "TRIP_CONTEXT_CORRECTION" }
+        detailContextOriginalText.text = if (latestCorrection != null) {
+            "Original collected context: ${formatContextRevision(latestCorrection.originalValue)}\n" +
+                "Current corrected context: ${formatContextRevision(latestCorrection.currentValue)}"
+        } else if (trip.contextCollectedAtMs == null) {
+            "Original context: not collected by this build. Route diversion=not collected; stop=not collected; note=none"
+        } else {
+            "Collected at ${trip.contextCollectedAtMs}: route diversion=${trip.routeDiversion}; stop=${trip.nonTrafficStop ?: "NONE"}; note=${trip.contextNote ?: "none"}"
+        }
+        detailRouteDiversionSwitch.isChecked = trip.routeDiversion
+        detailNonTrafficStopSpinner.setSelection(NonTrafficStop.values.indexOf(trip.nonTrafficStop ?: NonTrafficStop.NONE).coerceAtLeast(0))
+        detailContextNoteEditText.setText(trip.contextNote.orEmpty())
+        val editable = trip.status != TripStatus.RECORDING
+        detailRouteDiversionSwitch.isEnabled = editable
+        detailNonTrafficStopSpinner.isEnabled = editable
+        detailContextNoteEditText.isEnabled = editable
+        saveContextCorrectionButton.isEnabled = editable
+    }
+
+    private fun formatContextRevision(value: String?): String = runCatching {
+        val json = org.json.JSONObject(value ?: "{}")
+        "route diversion=${json.optBoolean("route_diversion", false)}; " +
+            "stop=${json.optString("non_traffic_stop", "not collected")}; " +
+            "note=${json.optString("context_note", "none").ifBlank { "none" }}"
+    }.getOrDefault(value ?: "not available")
+
+    private fun saveContextCorrection() {
+        val stop = NonTrafficStop.values[detailNonTrafficStopSpinner.selectedItemPosition]
+        val note = detailContextNoteEditText.text.toString().trim().takeIf { it.isNotEmpty() }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    database.tripDao().correctTripContext(
+                        tripId = tripId,
+                        routeDiversion = detailRouteDiversionSwitch.isChecked,
+                        nonTrafficStop = stop,
+                        contextNote = note,
+                        reason = "post-trip context review"
+                    )
+                }
+                Toast.makeText(this@TripDetailActivity, "Trip context correction saved", Toast.LENGTH_SHORT).show()
+                loadTripDetails()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not save trip context correction", error)
+                Toast.makeText(this@TripDetailActivity, "Context correction was not saved", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun updateQaStatus(status: String) {

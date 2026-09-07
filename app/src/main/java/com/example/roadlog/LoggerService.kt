@@ -57,12 +57,24 @@ class LoggerService : Service() {
         const val EXTRA_DIRECTION = "direction"
         const val EXTRA_OBSERVATION_PERIOD = "observation_period"
         const val EXTRA_STUDY_DATE = "study_date"
+        const val EXTRA_DRIVER_ID = "driver_id"
+        const val EXTRA_VEHICLE_ID = "vehicle_id"
+        const val EXTRA_VEHICLE_TYPE = "vehicle_type"
+        const val EXTRA_VEHICLE_MAKE = "vehicle_make"
+        const val EXTRA_VEHICLE_MODEL = "vehicle_model"
+        const val EXTRA_VEHICLE_YEAR = "vehicle_year"
+        const val EXTRA_WEATHER = "weather"
+        const val EXTRA_ROAD_WETNESS = "road_wetness"
+        const val EXTRA_ROUTE_DIVERSION = "route_diversion"
+        const val EXTRA_NON_TRAFFIC_STOP = "non_traffic_stop"
+        const val EXTRA_CONTEXT_NOTE = "context_note"
         const val EXTRA_RECORDING_STATE = "recording_state"
         const val EXTRA_ACTIVE = "active"
         const val EXTRA_TIME_ZONE_ID = "time_zone_id"
         const val EXTRA_SENSOR_PROFILE_VERSION = "sensor_profile_version"
         const val NOTIFICATION_CHANNEL_ID = "roadlog_service_channel"
         const val NOTIFICATION_ID = 1
+        const val MODEL_PREPARATION_TIMEOUT_MS = 120_000L
         const val TAG = "RoadLog"
     }
 
@@ -99,7 +111,7 @@ class LoggerService : Service() {
     private var lastGpsPoint: GpsPoint? = null
     private val causeBreakdownMap = mutableMapOf<String, Int>()
     private var latestLocationProvider: String? = null
-    private var isListening = false
+    @Volatile private var isListening = false
     @Volatile private var modelReady = false
 
     @Volatile private var draftTripId: Long = -1
@@ -108,6 +120,8 @@ class LoggerService : Service() {
     @Volatile private var lifecycleState = RecordingState.IDLE
     @Volatile private var stopRequested = false
     private var startJob: Job? = null
+    private val preparationFailureHandled = AtomicBoolean(false)
+    @Volatile private var listenerStartInFlight = false
     @Volatile private var writeFailureCount = 0
     @Volatile private var droppedSampleCount = 0
     private var lastWriteTimeMs = 0L
@@ -115,6 +129,17 @@ class LoggerService : Service() {
     private var configuredObservationPeriod: String? = null
     private var configuredDeviceId: String? = null
     private var configuredStudyDate: String? = null
+    private var configuredDriverId: String? = null
+    private var configuredVehicleId: String? = null
+    private var configuredVehicleType: String? = null
+    private var configuredVehicleMake: String? = null
+    private var configuredVehicleModel: String? = null
+    private var configuredVehicleYear: Int? = null
+    private var configuredWeather: String? = null
+    private var configuredRoadWetness: String? = null
+    private var configuredRouteDiversion = false
+    private var configuredNonTrafficStop: String? = null
+    private var configuredContextNote: String? = null
     private var audioFailureInjection = AudioFailureInjectionPoint.NONE
     private val sensorProfileVersion = "1"
     private var recoveryJob: Job? = null
@@ -122,6 +147,7 @@ class LoggerService : Service() {
     private val audioPersistenceJobs = mutableListOf<Job>()
     @Volatile private var audioFrameFailureCount = 0
     @Volatile private var modelPreparationError: String? = null
+    private var servicePreparationGeneration = 0L
     @Volatile private var causeConfigError: String? = null
     @Volatile private var gpsInterruptionDetected = false
     @Volatile private var sensorInterruptionDetected = false
@@ -375,27 +401,56 @@ class LoggerService : Service() {
         }
     }
 
-    private fun prepareVoskModel() {
+    private fun prepareVoskModel(suppressCallbacks: Boolean = false) {
         Log.i(TAG, "Preparing Vosk offline model...")
-        modelPreparationError = null
-        voskRecognizer = VoskSpeechRecognizer(this, GrammarBuilder.buildGrammarJson(causeConfig))
-        voskRecognizer?.prepare(
-            onReady = {
+        val generation = synchronized(this) {
+            servicePreparationGeneration++
+            modelReady = false
+            modelPreparationError = null
+            servicePreparationGeneration
+        }
+        voskRecognizer?.cancelPreparation()
+        voskRecognizer?.destroy()
+        val recognizer = VoskSpeechRecognizer(this, GrammarBuilder.buildGrammarJson(causeConfig))
+        voskRecognizer = recognizer
+        recognizer.prepare(
+            onReady = onReady@{
+                synchronized(this) {
+                    if (generation != servicePreparationGeneration || voskRecognizer !== recognizer) {
+                        Log.w(TAG, "Ignoring stale service model completion gen=$generation")
+                        return@onReady
+                    }
+                    modelReady = true
+                    modelPreparationError = null
+                }
                 Log.i(TAG, "Vosk model ready")
-                modelReady = true
-                modelPreparationError = null
                 broadcastStatus("Vosk model ready. Waiting for START...")
                 if (lifecycleState == RecordingState.RECORDING && !isListening) {
                     startVoskListening()
                 }
             },
-            onError = { error ->
+            onError = onError@{ error ->
+                synchronized(this) {
+                    if (generation != servicePreparationGeneration || voskRecognizer !== recognizer) {
+                        Log.w(TAG, "Ignoring stale service model error gen=$generation")
+                        return@onError
+                    }
+                    modelReady = false
+                    modelPreparationError = error
+                }
                 Log.e(TAG, "Vosk model error: $error")
-                modelReady = false
-                modelPreparationError = error
                 broadcastStatus("Vosk model error: $error")
-            }
+            },
+            suppressCallbacks = suppressCallbacks
         )
+    }
+
+    private fun invalidateModelPreparation() {
+        synchronized(this) {
+            servicePreparationGeneration++
+            modelReady = false
+            modelPreparationError = null
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -406,14 +461,40 @@ class LoggerService : Service() {
                 configuredObservationPeriod = intent.getStringExtra(EXTRA_OBSERVATION_PERIOD)
                 configuredStudyDate = intent.getStringExtra(EXTRA_STUDY_DATE)
                     ?: ResearchClock.studyDateLocal(System.currentTimeMillis())
+                configuredDriverId = intent.getStringExtra(EXTRA_DRIVER_ID)
+                configuredVehicleId = intent.getStringExtra(EXTRA_VEHICLE_ID)
+                configuredVehicleType = intent.getStringExtra(EXTRA_VEHICLE_TYPE)
+                configuredVehicleMake = intent.getStringExtra(EXTRA_VEHICLE_MAKE)
+                configuredVehicleModel = intent.getStringExtra(EXTRA_VEHICLE_MODEL)
+                configuredVehicleYear = intent.getIntExtra(EXTRA_VEHICLE_YEAR, -1).takeIf { it > 0 }
+                configuredWeather = intent.getStringExtra(EXTRA_WEATHER)
+                configuredRoadWetness = intent.getStringExtra(EXTRA_ROAD_WETNESS)
+                configuredRouteDiversion = intent.getBooleanExtra(EXTRA_ROUTE_DIVERSION, false)
+                configuredNonTrafficStop = intent.getStringExtra(EXTRA_NON_TRAFFIC_STOP) ?: NonTrafficStop.NONE
+                configuredContextNote = intent.getStringExtra(EXTRA_CONTEXT_NOTE)
                 val validation = TripStartValidator.validate(
                     TripStartConfiguration(
                         direction = configuredDirection,
                         observationPeriod = configuredObservationPeriod
                     )
                 )
-                if (validation.isNotEmpty()) {
-                    broadcastStatus("Cannot start: ${validation.joinToString(", ")}")
+                val contextValidation = TripContextValidator.validate(
+                    TripContext(
+                        driverId = configuredDriverId,
+                        vehicleId = configuredVehicleId,
+                        vehicleType = configuredVehicleType,
+                        vehicleMake = configuredVehicleMake,
+                        vehicleModel = configuredVehicleModel,
+                        vehicleYear = configuredVehicleYear,
+                        weather = configuredWeather,
+                        roadWetness = configuredRoadWetness,
+                        routeDiversion = configuredRouteDiversion,
+                        nonTrafficStop = configuredNonTrafficStop ?: NonTrafficStop.NONE,
+                        contextNote = configuredContextNote
+                    )
+                )
+                if (validation.isNotEmpty() || contextValidation.isNotEmpty()) {
+                    broadcastStatus("Cannot start: ${(validation + contextValidation).joinToString(", ")}")
                 } else {
                     audioFailureInjection = AudioFailureInjectionConfig.consumeNext(this)
                     startRecording()
@@ -444,6 +525,24 @@ class LoggerService : Service() {
     }
 
     private fun interruptForServiceDestroy() {
+        val ownsTermination = synchronized(this) {
+            if (preparationFailureHandled.get()) {
+                false
+            } else {
+                preparationFailureHandled.set(true)
+                true
+            }
+        }
+        if (!ownsTermination) {
+            stopRequested = true
+            invalidateModelPreparation()
+            voskRecognizer?.cancelPreparation()
+            serviceScope.launch {
+                try { voskRecognizer?.stopAndWait() } catch (_: Exception) {}
+                try { voskRecognizer?.destroyAndWait() } catch (_: Exception) {}
+            }
+            return
+        }
         val tripId: Long
         val interruptionTimeMs = System.currentTimeMillis()
         val interruptionNanoTime = SystemClock.elapsedRealtimeNanos()
@@ -451,6 +550,8 @@ class LoggerService : Service() {
             stopRequested = true
             if (lifecycleState == RecordingState.PREPARING) {
                 startJob?.cancel()
+                invalidateModelPreparation()
+                voskRecognizer?.cancelPreparation()
             }
             lifecycleState = RecordingState.FINALIZING
             isRunning.set(false)
@@ -518,6 +619,12 @@ class LoggerService : Service() {
             lifecycleState = RecordingState.PREPARING
             stopRequested = false
         }
+        preparationFailureHandled.set(false)
+        listenerStartInFlight = false
+        isListening = false
+        if (BuildConfig.DEBUG && VoskPreparationInjection.consumeNext(this)) {
+            prepareVoskModel(suppressCallbacks = true)
+        }
 
         Log.i(TAG, "startRecording() preparing durable draft")
 
@@ -582,10 +689,13 @@ class LoggerService : Service() {
 
                 // The same AudioRecord feeds Vosk and the archival encoder. Do not
                 // announce an active trip until that shared source is available.
-                while (!modelReady && modelPreparationError == null && !stopRequested && isActive) {
-                    delay(250L)
-                }
-                check(modelReady || stopRequested) {
+                val prepared = VoskPreparationWait.await(
+                    isReady = { modelReady },
+                    error = { modelPreparationError },
+                    stopRequested = { stopRequested || !isActive },
+                    timeoutMs = MODEL_PREPARATION_TIMEOUT_MS
+                )
+                check(prepared || stopRequested) {
                     "offline speech/audio model is not ready: ${modelPreparationError ?: "unknown error"}"
                 }
                 if (stopRequested) {
@@ -625,30 +735,87 @@ class LoggerService : Service() {
                     persistTripQuality(createdTripId, System.currentTimeMillis())
                     finishServiceWithoutCompletion()
                 }
+            } catch (e: TimeoutCancellationException) {
+                failPreparation(
+                    tripId = draftTripId,
+                    reason = "PREPARATION_TIMEOUT: model not ready within ${MODEL_PREPARATION_TIMEOUT_MS} ms"
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create durable recording draft", e)
-                if (draftTripId >= 0L) {
-                    try {
-                        database.tripDao().markTripInterrupted(
-                            tripId = draftTripId,
-                            status = TripStatus.RECOVERABLE,
-                            endTimeMs = System.currentTimeMillis(),
-                            endNanoTime = SystemClock.elapsedRealtimeNanos(),
-                            reason = "PREPARATION_FAILURE: ${e.message ?: "unknown"}",
-                            lastWriteTimeMs = lastWriteTimeMs
-                        )
-                        persistTripQuality(draftTripId, System.currentTimeMillis())
-                    } catch (markError: Exception) {
-                        Log.e(TAG, "Could not mark preparation failure recoverable", markError)
-                    }
-                }
-                lifecycleState = RecordingState.FAILED
-                broadcastStatus("Recording could not be started: ${e.message ?: "database error"}")
-                finishServiceWithoutCompletion()
+                failPreparation(
+                    tripId = draftTripId,
+                    reason = "PREPARATION_FAILURE: ${e.message ?: "database error"}"
+                )
             }
         }
+    }
+
+    private suspend fun failPreparation(tripId: Long, reason: String) {
+        val ownsTermination = synchronized(this) {
+            if (preparationFailureHandled.get()) {
+                false
+            } else {
+                preparationFailureHandled.set(true)
+                true
+            }
+        }
+        if (!ownsTermination) {
+            Log.w(TAG, "Ignoring duplicate preparation failure: $reason")
+            return
+        }
+
+        val endTimeMs = System.currentTimeMillis()
+        val endNanoTime = SystemClock.elapsedRealtimeNanos()
+        stopRequested = true
+        handler.removeCallbacks(statusUpdateRunnable)
+        handler.removeCallbacks(locationUpdateRunnable)
+        flushJob?.cancel()
+        flushJob = null
+        try { locationManager.removeUpdates(gpsCallback) } catch (_: Exception) {}
+        sensorManager.unregisterListener(accelListener)
+        sensorManager.unregisterListener(gyroListener)
+        sensorManager.unregisterListener(rotationListener)
+        listenerStartInFlight = false
+        isListening = false
+        invalidateModelPreparation()
+        voskRecognizer?.cancelPreparation()
+        try { voskRecognizer?.stopAndWait() } catch (error: Exception) {
+            Log.w(TAG, "Could not stop Vosk during preparation failure", error)
+        }
+        try { tripAudioRecorder?.stop(endTimeMs, endNanoTime, reason) } catch (error: Exception) {
+            Log.w(TAG, "Could not stop archival audio during preparation failure", error)
+        }
+        awaitAudioPersistence()
+
+        if (tripId >= 0L) {
+            try {
+                database.tripDao().markTripInterrupted(
+                    tripId = tripId,
+                    status = TripStatus.RECOVERABLE,
+                    endTimeMs = endTimeMs,
+                    endNanoTime = endNanoTime,
+                    reason = reason,
+                    lastWriteTimeMs = lastWriteTimeMs,
+                    writeFailureCount = writeFailureCount,
+                    droppedSampleCount = droppedSampleCount,
+                    gpsInterruption = gpsInterruptionDetected,
+                    sensorInterruption = sensorInterruptionDetected
+                )
+                persistTripQuality(tripId, endTimeMs)
+            } catch (persistenceError: Exception) {
+                Log.e(TAG, "Could not persist preparation failure", persistenceError)
+            }
+        }
+
+        lifecycleState = RecordingState.FAILED
+        sendRecordingState()
+        broadcastStatus("Recording could not be started: $reason. Trip preserved for recovery.")
+        try { voskRecognizer?.destroyAndWait() } catch (error: Exception) {
+            Log.w(TAG, "Could not destroy Vosk after preparation failure", error)
+        }
+        finishServiceWithoutCompletion()
     }
 
     private fun startProducers() {
@@ -722,6 +889,8 @@ class LoggerService : Service() {
                 RecordingState.IDLE, RecordingState.FAILED, RecordingState.ABORTED -> return
                 RecordingState.PREPARING -> {
                     stopRequested = true
+                    invalidateModelPreparation()
+                    voskRecognizer?.cancelPreparation()
                     broadcastStatus("Stopping before recording started")
                     return
                 }
@@ -754,6 +923,7 @@ class LoggerService : Service() {
 
         voskRecognizer?.stop()
         isListening = false
+        listenerStartInFlight = false
         Log.i(TAG, "Vosk listener stopped")
 
         val endTimeMs = System.currentTimeMillis()
@@ -822,6 +992,18 @@ class LoggerService : Service() {
             corridorId = ResearchStudy.CORRIDOR_ID,
             direction = configuredDirection,
             observationPeriod = configuredObservationPeriod,
+            driverId = configuredDriverId,
+            vehicleId = configuredVehicleId,
+            vehicleType = configuredVehicleType,
+            vehicleMake = configuredVehicleMake,
+            vehicleModel = configuredVehicleModel,
+            vehicleYear = configuredVehicleYear,
+            weather = configuredWeather,
+            roadWetness = configuredRoadWetness,
+            routeDiversion = configuredRouteDiversion,
+            nonTrafficStop = configuredNonTrafficStop,
+            contextNote = configuredContextNote,
+            contextCollectedAtMs = startTimeMs,
             validityStatus = null,
             qaStatus = TripQaStatus.UNREVIEWED,
             codebookVersion = causeConfig.version,
@@ -1244,6 +1426,17 @@ class LoggerService : Service() {
             putExtra(EXTRA_DIRECTION, configuredDirection)
             putExtra(EXTRA_OBSERVATION_PERIOD, configuredObservationPeriod)
             putExtra(EXTRA_STUDY_DATE, configuredStudyDate)
+            putExtra(EXTRA_DRIVER_ID, configuredDriverId)
+            putExtra(EXTRA_VEHICLE_ID, configuredVehicleId)
+            putExtra(EXTRA_VEHICLE_TYPE, configuredVehicleType)
+            putExtra(EXTRA_VEHICLE_MAKE, configuredVehicleMake)
+            putExtra(EXTRA_VEHICLE_MODEL, configuredVehicleModel)
+            putExtra(EXTRA_VEHICLE_YEAR, configuredVehicleYear ?: -1)
+            putExtra(EXTRA_WEATHER, configuredWeather)
+            putExtra(EXTRA_ROAD_WETNESS, configuredRoadWetness)
+            putExtra(EXTRA_ROUTE_DIVERSION, configuredRouteDiversion)
+            putExtra(EXTRA_NON_TRAFFIC_STOP, configuredNonTrafficStop)
+            putExtra(EXTRA_CONTEXT_NOTE, configuredContextNote)
         })
     }
 
@@ -1258,6 +1451,17 @@ class LoggerService : Service() {
             putExtra(EXTRA_OBSERVATION_PERIOD, configuredObservationPeriod)
             putExtra(EXTRA_STUDY_DATE, configuredStudyDate)
             putExtra(EXTRA_TIME_ZONE_ID, ResearchTime.KATHMANDU_ZONE_ID)
+            putExtra(EXTRA_DRIVER_ID, configuredDriverId)
+            putExtra(EXTRA_VEHICLE_ID, configuredVehicleId)
+            putExtra(EXTRA_VEHICLE_TYPE, configuredVehicleType)
+            putExtra(EXTRA_VEHICLE_MAKE, configuredVehicleMake)
+            putExtra(EXTRA_VEHICLE_MODEL, configuredVehicleModel)
+            putExtra(EXTRA_VEHICLE_YEAR, configuredVehicleYear ?: -1)
+            putExtra(EXTRA_WEATHER, configuredWeather)
+            putExtra(EXTRA_ROAD_WETNESS, configuredRoadWetness)
+            putExtra(EXTRA_ROUTE_DIVERSION, configuredRouteDiversion)
+            putExtra(EXTRA_NON_TRAFFIC_STOP, configuredNonTrafficStop)
+            putExtra(EXTRA_CONTEXT_NOTE, configuredContextNote)
         })
     }
 
@@ -1267,6 +1471,8 @@ class LoggerService : Service() {
             lifecycleState = RecordingState.IDLE
             stopRequested = false
         }
+        isListening = false
+        listenerStartInFlight = false
         sendRecordingState()
         handler.removeCallbacks(statusUpdateRunnable)
         handler.removeCallbacks(locationUpdateRunnable)
@@ -1288,13 +1494,21 @@ class LoggerService : Service() {
     }
 
     private fun startVoskListening() {
-        if (!isRunning.get()) {
-            Log.w(TAG, "startVoskListening skipped: service not running")
-            return
+        synchronized(this) {
+            if (!isRunning.get()) {
+                Log.w(TAG, "startVoskListening skipped: service not running")
+                return
+            }
+            if (isListening || listenerStartInFlight) {
+                Log.d(TAG, "startVoskListening skipped: listener already active or starting")
+                return
+            }
+            listenerStartInFlight = true
         }
 
         val recognizer = voskRecognizer ?: run {
             Log.w(TAG, "startVoskListening skipped: voskRecognizer null")
+            listenerStartInFlight = false
             return
         }
         Log.i(TAG, "startVoskListening called, recognizer=$recognizer")
@@ -1389,6 +1603,7 @@ class LoggerService : Service() {
         recognizer.startListening(object : VoskSpeechRecognizer.Callback {
             override fun onReady() {
                 Log.i(TAG, "Vosk listening started")
+                listenerStartInFlight = false
                 isListening = true
                 broadcastStatus()
             }
@@ -1429,6 +1644,7 @@ class LoggerService : Service() {
 
             override fun onError(error: String) {
                 Log.e(TAG, "Vosk error callback: $error")
+                listenerStartInFlight = false
                 isListening = false
                 broadcastHeardText("[error: $error]", isPartial = false)
                 broadcastStatus()

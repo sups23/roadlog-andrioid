@@ -25,11 +25,17 @@ import android.location.LocationManager
 import android.hardware.SensorManager
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.EditText
+import android.widget.Switch
+import android.widget.AdapterView
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.widget.addTextChangedListener
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -65,6 +71,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var observationPeriodSpinner: Spinner
     private lateinit var studyDateText: TextView
     private lateinit var healthText: TextView
+    private lateinit var fixedTripProfileText: TextView
+    private lateinit var weatherSpinner: Spinner
+    private lateinit var roadWetnessSpinner: Spinner
+    private lateinit var routeDiversionSwitch: Switch
+    private lateinit var nonTrafficStopSpinner: Spinner
+    private lateinit var contextNoteEditText: EditText
+    private lateinit var contextSelectionErrorText: TextView
+    private lateinit var contextControls: List<View>
 
     private var isRecording = false
     private var isPreparingRecording = false
@@ -89,7 +103,16 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val status = intent?.getStringExtra(LoggerService.EXTRA_STATUS) ?: return
             Log.d(TAG, "Status received: $status")
-            if (status.startsWith("cause:")) {
+            if (status.startsWith("Recording could not be started:")) {
+                isRecording = false
+                isPreparingRecording = false
+                isFinalizingRecording = false
+                updateUiState(isRecording = false)
+                statusText.visibility = View.VISIBLE
+                statusText.text = status
+                modelStatusText.visibility = View.VISIBLE
+                modelStatusText.text = "Preparation failed. The trip was preserved for recovery."
+            } else if (status.startsWith("cause:")) {
                 val cause = status.removePrefix("cause:")
                 lastMatchedCause = cause
                 statusText.text = "Voice event: $cause"
@@ -141,6 +164,7 @@ class MainActivity : AppCompatActivity() {
                 isPreparingRecording = false
                 isFinalizingRecording = false
                 selectResearchValues(intent?.getStringExtra(LoggerService.EXTRA_DIRECTION), intent?.getStringExtra(LoggerService.EXTRA_OBSERVATION_PERIOD))
+                intent?.let { selectTripContext(it) }
                 statusText.text = "Recording started and saved locally"
                 updateUiState(isRecording = true)
             }
@@ -152,11 +176,17 @@ class MainActivity : AppCompatActivity() {
             val active = intent?.getBooleanExtra(LoggerService.EXTRA_ACTIVE, false) ?: false
             val state = intent?.getStringExtra(LoggerService.EXTRA_RECORDING_STATE)
             activeTripId = intent?.getLongExtra(LoggerService.EXTRA_TRIP_ID, -1L) ?: -1L
-            if (active) {
+            if (state == RecordingState.FAILED.name) {
+                isRecording = false
+                isPreparingRecording = false
+                isFinalizingRecording = false
+                updateUiState(isRecording = false)
+            } else if (active) {
                 isRecording = true
                 isPreparingRecording = state == RecordingState.PREPARING.name
                 isFinalizingRecording = state == RecordingState.FINALIZING.name
                 selectResearchValues(intent?.getStringExtra(LoggerService.EXTRA_DIRECTION), intent?.getStringExtra(LoggerService.EXTRA_OBSERVATION_PERIOD))
+                intent?.let { selectTripContext(it) }
                 updateUiState(isRecording = true)
             } else if (state == RecordingState.IDLE.name || state == null) {
                 isPreparingRecording = false
@@ -204,6 +234,22 @@ class MainActivity : AppCompatActivity() {
         observationPeriodSpinner = findViewById(R.id.observationPeriodSpinner)
         studyDateText = findViewById(R.id.studyDateText)
         healthText = findViewById(R.id.healthText)
+        fixedTripProfileText = findViewById(R.id.fixedTripProfileText)
+        weatherSpinner = findViewById(R.id.weatherSpinner)
+        roadWetnessSpinner = findViewById(R.id.roadWetnessSpinner)
+        routeDiversionSwitch = findViewById(R.id.routeDiversionSwitch)
+        nonTrafficStopSpinner = findViewById(R.id.nonTrafficStopSpinner)
+        contextNoteEditText = findViewById(R.id.contextNoteEditText)
+        contextSelectionErrorText = findViewById(R.id.contextSelectionErrorText)
+        contextControls = listOf(
+            weatherSpinner, roadWetnessSpinner, directionSpinner, observationPeriodSpinner, routeDiversionSwitch,
+            nonTrafficStopSpinner, contextNoteEditText
+        )
+
+        fixedTripProfileText.text = "Driver: ${ResearchTripDefaults.DRIVER_ID}\n" +
+            "Vehicle: ${ResearchTripDefaults.VEHICLE_ID}\n" +
+            "Profile: ${ResearchVehicleProfile.TYPE} · ${ResearchVehicleProfile.MAKE} · " +
+            "${ResearchVehicleProfile.MODEL} · ${ResearchVehicleProfile.YEAR}"
 
         directionSpinner.adapter = ArrayAdapter(
             this,
@@ -215,6 +261,32 @@ class MainActivity : AppCompatActivity() {
             android.R.layout.simple_spinner_item,
             listOf("Select period", "Morning peak", "Afternoon / off-peak", "Evening peak")
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        weatherSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf("Select weather") + TripWeather.values
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        roadWetnessSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf("Select road wetness") + RoadWetness.values
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        nonTrafficStopSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            NonTrafficStop.values
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        nonTrafficStopSpinner.setSelection(0)
+        restoreContextState(savedInstanceState)
+        contextNoteEditText.setOnFocusChangeListener { _, _ -> updateContextValidation() }
+        contextNoteEditText.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = updateContextValidation()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        listOf(weatherSpinner, roadWetnessSpinner, directionSpinner, observationPeriodSpinner, nonTrafficStopSpinner)
+            .forEach { spinner -> spinner.setOnItemSelectedListener(SimpleItemSelectedListener { updateContextValidation() }) }
+        routeDiversionSwitch.setOnCheckedChangeListener { _, _ -> updateContextValidation() }
         studyDateText.text = "Study date: ${ResearchClock.studyDateLocal(System.currentTimeMillis())} (${ResearchTime.KATHMANDU_ZONE_ID})"
         updatePreTripHealth()
 
@@ -244,7 +316,11 @@ class MainActivity : AppCompatActivity() {
         setupMap()
         MapTileConfiguration.configureAttributionView(findViewById(R.id.mapAttribution))
 
-        updateUiState(isRecording = false)
+        isRecording = savedInstanceState?.getBoolean("recording_active", false) ?: false
+        isPreparingRecording = savedInstanceState?.getBoolean("recording_preparing", false) ?: false
+        isFinalizingRecording = savedInstanceState?.getBoolean("recording_finalizing", false) ?: false
+        activeTripId = savedInstanceState?.getLong("recording_trip_id", -1L) ?: -1L
+        updateUiState(isRecording = isRecording)
         statusText.visibility = View.GONE
         modelStatusText.text = ""
 
@@ -305,6 +381,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             centerMapOnLastKnownLocation()
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        saveContextState(outState)
+        outState.putBoolean("recording_active", isRecording)
+        outState.putBoolean("recording_preparing", isPreparingRecording)
+        outState.putBoolean("recording_finalizing", isFinalizingRecording)
+        outState.putLong("recording_trip_id", activeTripId)
+        super.onSaveInstanceState(outState)
     }
 
     private fun refreshLocationOverlay() {
@@ -465,21 +550,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStartClicked() {
         Log.d(TAG, "START button clicked")
+        val context = currentTripContext()
         val validation = TripStartValidator.validate(
             TripStartConfiguration(
                 direction = selectedDirectionCode(),
                 observationPeriod = selectedObservationPeriodCode()
             )
         )
-        if (validation.isNotEmpty()) {
-            Toast.makeText(this, validation.joinToString("; "), Toast.LENGTH_LONG).show()
+        val allValidation = validation + TripContextValidator.validate(context)
+        if (allValidation.isNotEmpty()) {
+            updateContextValidation()
+            Toast.makeText(this, allValidation.joinToString("; "), Toast.LENGTH_LONG).show()
             return
         }
         if (!hasAllPermissions()) {
             ActivityCompat.requestPermissions(this, permissions, permissionRequestCode)
             return
         }
-        startRecording()
+        startRecording(context)
     }
 
     private fun onStopClicked() {
@@ -487,12 +575,23 @@ class MainActivity : AppCompatActivity() {
         stopRecording()
     }
 
-    private fun startRecording() {
+    private fun startRecording(context: TripContext) {
         val intent = Intent(this, LoggerService::class.java).apply {
             action = LoggerService.ACTION_START
             putExtra(LoggerService.EXTRA_DIRECTION, selectedDirectionCode())
             putExtra(LoggerService.EXTRA_OBSERVATION_PERIOD, selectedObservationPeriodCode())
             putExtra(LoggerService.EXTRA_STUDY_DATE, ResearchClock.studyDateLocal(System.currentTimeMillis()))
+            putExtra(LoggerService.EXTRA_DRIVER_ID, context.driverId)
+            putExtra(LoggerService.EXTRA_VEHICLE_ID, context.vehicleId)
+            putExtra(LoggerService.EXTRA_VEHICLE_TYPE, context.vehicleType)
+            putExtra(LoggerService.EXTRA_VEHICLE_MAKE, context.vehicleMake)
+            putExtra(LoggerService.EXTRA_VEHICLE_MODEL, context.vehicleModel)
+            putExtra(LoggerService.EXTRA_VEHICLE_YEAR, context.vehicleYear ?: -1)
+            putExtra(LoggerService.EXTRA_WEATHER, context.weather)
+            putExtra(LoggerService.EXTRA_ROAD_WETNESS, context.roadWetness)
+            putExtra(LoggerService.EXTRA_ROUTE_DIVERSION, context.routeDiversion)
+            putExtra(LoggerService.EXTRA_NON_TRAFFIC_STOP, context.nonTrafficStop)
+            putExtra(LoggerService.EXTRA_CONTEXT_NOTE, context.contextNote)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
@@ -544,6 +643,40 @@ class MainActivity : AppCompatActivity() {
         else -> null
     }
 
+    private fun currentTripContext(): TripContext = TripContext(
+        driverId = ResearchTripDefaults.DRIVER_ID,
+        vehicleId = ResearchTripDefaults.VEHICLE_ID,
+        vehicleType = ResearchVehicleProfile.TYPE,
+        vehicleMake = ResearchVehicleProfile.MAKE,
+        vehicleModel = ResearchVehicleProfile.MODEL,
+        vehicleYear = ResearchVehicleProfile.YEAR,
+        weather = weatherSpinner.selectedItemPosition.takeIf { it > 0 }?.let { TripWeather.values[it - 1] },
+        roadWetness = roadWetnessSpinner.selectedItemPosition.takeIf { it > 0 }?.let { RoadWetness.values[it - 1] },
+        routeDiversion = routeDiversionSwitch.isChecked,
+        nonTrafficStop = NonTrafficStop.values[nonTrafficStopSpinner.selectedItemPosition],
+        contextNote = contextNoteEditText.text.toString().trim().takeIf { it.isNotEmpty() }
+    )
+
+    private fun selectTripContext(intent: Intent) {
+        intent.getStringExtra(LoggerService.EXTRA_WEATHER)?.let { value -> weatherSpinner.setSelection(TripWeather.values.indexOf(value) + 1) }
+        intent.getStringExtra(LoggerService.EXTRA_ROAD_WETNESS)?.let { value -> roadWetnessSpinner.setSelection(RoadWetness.values.indexOf(value) + 1) }
+        routeDiversionSwitch.isChecked = intent.getBooleanExtra(LoggerService.EXTRA_ROUTE_DIVERSION, false)
+        intent.getStringExtra(LoggerService.EXTRA_NON_TRAFFIC_STOP)?.let { value -> nonTrafficStopSpinner.setSelection(NonTrafficStop.values.indexOf(value).coerceAtLeast(0)) }
+        contextNoteEditText.setText(intent.getStringExtra(LoggerService.EXTRA_CONTEXT_NOTE).orEmpty())
+    }
+
+    private fun updateContextValidation() {
+        if (!::contextNoteEditText.isInitialized) return
+        val errors = TripContextValidator.validate(currentTripContext())
+        contextSelectionErrorText.text = errors.filter { it.contains("weather") || it.contains("wetness") || it.contains("stop") }.joinToString("; ")
+        contextSelectionErrorText.visibility = if (contextSelectionErrorText.text.isNullOrEmpty()) View.GONE else View.VISIBLE
+        if (::startButton.isInitialized && !isRecording && !isFinalizingRecording) {
+            startButton.isEnabled = errors.isEmpty() && TripStartValidator.validate(
+                TripStartConfiguration(selectedDirectionCode(), selectedObservationPeriodCode())
+            ).isEmpty()
+        }
+    }
+
     private fun selectResearchValues(direction: String?, period: String?) {
         directionSpinner.setSelection(
             when (direction) {
@@ -560,6 +693,27 @@ class MainActivity : AppCompatActivity() {
                 else -> 0
             }
         )
+    }
+
+    private fun saveContextState(outState: Bundle) {
+        outState.putInt("context_weather", weatherSpinner.selectedItemPosition)
+        outState.putInt("context_wetness", roadWetnessSpinner.selectedItemPosition)
+        outState.putInt("context_direction", directionSpinner.selectedItemPosition)
+        outState.putInt("context_period", observationPeriodSpinner.selectedItemPosition)
+        outState.putBoolean("context_diversion", routeDiversionSwitch.isChecked)
+        outState.putInt("context_stop", nonTrafficStopSpinner.selectedItemPosition)
+        outState.putString("context_note", contextNoteEditText.text.toString())
+    }
+
+    private fun restoreContextState(savedInstanceState: Bundle?) {
+        savedInstanceState ?: return
+        weatherSpinner.setSelection(savedInstanceState.getInt("context_weather", 0))
+        roadWetnessSpinner.setSelection(savedInstanceState.getInt("context_wetness", 0))
+        directionSpinner.setSelection(savedInstanceState.getInt("context_direction", 0))
+        observationPeriodSpinner.setSelection(savedInstanceState.getInt("context_period", 0))
+        routeDiversionSwitch.isChecked = savedInstanceState.getBoolean("context_diversion", false)
+        nonTrafficStopSpinner.setSelection(savedInstanceState.getInt("context_stop", 0))
+        contextNoteEditText.setText(savedInstanceState.getString("context_note").orEmpty())
     }
 
     private fun hasAllPermissions(): Boolean {
@@ -658,6 +812,8 @@ class MainActivity : AppCompatActivity() {
         modelStatusText.visibility = if (isRecording) View.VISIBLE else View.GONE
         directionSpinner.isEnabled = !isRecording && !isFinalizingRecording
         observationPeriodSpinner.isEnabled = !isRecording && !isFinalizingRecording
+        contextControls.forEach { it.isEnabled = !isRecording && !isFinalizingRecording }
+        updateContextValidation()
         if (isRecording) {
             statusText.visibility = View.VISIBLE
             statusText.text = if (isFinalizingRecording) {
@@ -691,4 +847,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateCauseHeardLine() {
         lastSpokenText.text = "Heard: $lastHeardText | Last: $lastMatchedCause"
     }
+}
+
+private class SimpleItemSelectedListener(
+    private val onSelected: () -> Unit
+) : AdapterView.OnItemSelectedListener {
+    override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) = onSelected()
+    override fun onNothingSelected(parent: AdapterView<*>?) = onSelected()
 }

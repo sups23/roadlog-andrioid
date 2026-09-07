@@ -49,30 +49,43 @@ class VoskSpeechRecognizer(
     @Volatile
     private var sessionListening = false
 
-    private var preparationGeneration = 0L
+    private val preparationGeneration = VoskPreparationGeneration()
+    private var preparationJob: Job? = null
 
     init {
         LibVosk.setLogLevel(LogLevel.INFO)
     }
 
-    fun prepare(onReady: () -> Unit, onError: (String) -> Unit) {
+    fun prepare(
+        onReady: () -> Unit,
+        onError: (String) -> Unit,
+        suppressCallbacks: Boolean = false
+    ) {
         if (isPrepared) {
-            onReady()
+            if (!suppressCallbacks) onReady()
             return
         }
 
-        val gen = ++preparationGeneration
+        val gen = synchronized(this) {
+            preparationJob?.cancel()
+            preparationGeneration.begin()
+        }
         Log.i(TAG, "Unpacking Vosk model from assets (gen=$gen)...")
-        recognizerScope.launch {
+        preparationJob = recognizerScope.launch {
             StorageService.unpack(
                 context,
                 modelPath,
                 "model",
-                { unpackedModel ->
-                    if (gen != preparationGeneration) {
-                        Log.w(TAG, "Ignoring stale model completion gen=$gen, current=$preparationGeneration")
+                unpackedModelCallback@{ unpackedModel ->
+                    if (!preparationGeneration.isCurrent(gen)) {
+                        Log.w(TAG, "Ignoring stale model completion gen=$gen")
                         unpackedModel.close()
-                        return@unpack
+                        return@unpackedModelCallback
+                    }
+                    if (suppressCallbacks) {
+                        Log.w(TAG, "Suppressing Vosk preparation success callback for debug timeout test")
+                        unpackedModel.close()
+                        return@unpackedModelCallback
                     }
                     try {
                         val rec = if (grammarJson != null) {
@@ -94,12 +107,29 @@ class VoskSpeechRecognizer(
                         onError("Failed to create Vosk recognizer: ${e.message}")
                     }
                 },
-                { exception ->
+                preparationErrorCallback@{ exception ->
+                    if (!preparationGeneration.isCurrent(gen)) {
+                        Log.w(TAG, "Ignoring stale model error gen=$gen")
+                        return@preparationErrorCallback
+                    }
+                    if (suppressCallbacks) {
+                        Log.w(TAG, "Suppressing Vosk preparation error callback for debug timeout test")
+                        return@preparationErrorCallback
+                    }
                     val msg = "Failed to unpack Vosk model: ${exception.message}"
                     Log.e(TAG, msg, exception)
                     onError(msg)
                 }
             )
+        }
+    }
+
+    /** Invalidates callbacks and cancels the coroutine that initiated unpacking. */
+    fun cancelPreparation() {
+        synchronized(this) {
+            preparationGeneration.invalidate()
+            preparationJob?.cancel()
+            preparationJob = null
         }
     }
 
@@ -200,22 +230,24 @@ class VoskSpeechRecognizer(
     }
 
     fun destroy() {
-        recognizerScope.launch {
-            lifecycleMutex.lock()
-            try {
-                isPrepared = false
-                preparationGeneration++
-                stopSessionLocked()
-                sessionCallback = null
-                sessionAudioFrameListener = null
-                try { preparedRecognizer?.close() } catch (_: Exception) {}
-                preparedRecognizer = null
-                try { preparedModel?.close() } catch (_: Exception) {}
-                preparedModel = null
-                Log.i(TAG, "Vosk resources destroyed")
-            } finally {
-                lifecycleMutex.unlock()
-            }
+        recognizerScope.launch { destroyAndWait() }
+    }
+
+    suspend fun destroyAndWait() {
+        cancelPreparation()
+        lifecycleMutex.lock()
+        try {
+            isPrepared = false
+            stopSessionLocked()
+            sessionCallback = null
+            sessionAudioFrameListener = null
+            try { preparedRecognizer?.close() } catch (_: Exception) {}
+            preparedRecognizer = null
+            try { preparedModel?.close() } catch (_: Exception) {}
+            preparedModel = null
+            Log.i(TAG, "Vosk resources destroyed")
+        } finally {
+            lifecycleMutex.unlock()
         }
     }
 

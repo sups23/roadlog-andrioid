@@ -80,6 +80,14 @@ class DebugInitProvider : ContentProvider() {
                             }
                             .show()
                     }
+                    activity.findViewById<Button>(R.id.configureVoskPreparationButton)?.setOnClickListener {
+                        VoskPreparationInjection.setSuppressNextCallback(activity)
+                        Toast.makeText(
+                            activity,
+                            "Next trip will suppress Vosk preparation callbacks and time out",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
             override fun onActivityStarted(activity: Activity) {}

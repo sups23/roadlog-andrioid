@@ -26,10 +26,80 @@ object ResearchCodebook {
 
 object ResearchVersions {
     const val CODEBOOK_VERSION = "3"
-    const val EXPORT_FORMAT_VERSION = "2"
-    const val PROTOCOL_VERSION = "1"
+    const val EXPORT_FORMAT_VERSION = "3"
+    const val PROTOCOL_VERSION = "2"
     const val SENSOR_PROFILE_VERSION = "1"
-    const val ROOM_SCHEMA_VERSION = 8
+    const val ROOM_SCHEMA_VERSION = 9
+}
+
+object ResearchVehicleProfile {
+    const val TYPE = "MOTORCYCLE"
+    const val MAKE = "Benelli"
+    const val MODEL = "TNT 150i"
+    const val YEAR = 2020
+}
+
+object ResearchTripDefaults {
+    const val DRIVER_ID = "DRIVER_01"
+    const val VEHICLE_ID = "VEHICLE_01"
+}
+
+object TripWeather {
+    const val CLEAR = "CLEAR"
+    const val CLOUDY = "CLOUDY"
+    const val LIGHT_RAIN = "LIGHT_RAIN"
+    const val HEAVY_RAIN = "HEAVY_RAIN"
+    const val OTHER = "OTHER"
+    val values = listOf(CLEAR, CLOUDY, LIGHT_RAIN, HEAVY_RAIN, OTHER)
+}
+
+object RoadWetness {
+    const val DRY = "DRY"
+    const val DAMP = "DAMP"
+    const val WET = "WET"
+    const val STANDING_WATER = "STANDING_WATER"
+    const val UNKNOWN = "UNKNOWN"
+    val values = listOf(DRY, DAMP, WET, STANDING_WATER, UNKNOWN)
+}
+
+object NonTrafficStop {
+    const val NONE = "NONE"
+    const val PERSONAL = "PERSONAL"
+    const val FUEL_OR_MAINTENANCE = "FUEL_OR_MAINTENANCE"
+    const val RESEARCH_SETUP = "RESEARCH_SETUP"
+    const val POLICE_OR_ADMINISTRATIVE = "POLICE_OR_ADMINISTRATIVE"
+    const val OTHER = "OTHER"
+    val values = listOf(NONE, PERSONAL, FUEL_OR_MAINTENANCE, RESEARCH_SETUP, POLICE_OR_ADMINISTRATIVE, OTHER)
+}
+
+data class TripContext(
+    val driverId: String?,
+    val vehicleId: String?,
+    val vehicleType: String?,
+    val vehicleMake: String?,
+    val vehicleModel: String?,
+    val vehicleYear: Int?,
+    val weather: String?,
+    val roadWetness: String?,
+    val routeDiversion: Boolean = false,
+    val nonTrafficStop: String = NonTrafficStop.NONE,
+    val contextNote: String? = null
+)
+
+object TripContextValidator {
+    fun validate(context: TripContext): List<String> = buildList {
+        if (context.driverId.isNullOrBlank()) add("driver ID is required")
+        if (context.vehicleId.isNullOrBlank()) add("vehicle ID is required")
+        if (context.vehicleType.isNullOrBlank()) add("vehicle type is required")
+        if (context.vehicleMake.isNullOrBlank()) add("vehicle make is required")
+        if (context.vehicleModel.isNullOrBlank()) add("vehicle model is required")
+        val year = context.vehicleYear
+        if (year == null || year !in 1886..2200) add("vehicle year must be valid")
+        if (context.weather !in TripWeather.values) add("weather must be selected")
+        if (context.roadWetness !in RoadWetness.values) add("road wetness must be selected")
+        if (context.nonTrafficStop !in NonTrafficStop.values) add("non-traffic stop is invalid")
+        if (context.contextNote.orEmpty().length > 500) add("context note must be 500 characters or fewer")
+    }
 }
 
 object TripExclusion {

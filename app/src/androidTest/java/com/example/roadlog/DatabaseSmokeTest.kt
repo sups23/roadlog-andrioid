@@ -48,6 +48,41 @@ class DatabaseSmokeTest {
     }
 
     @Test
+    fun `trip context persists and post-trip correction is audited`() = runTest {
+        val tripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                driverId = "DRIVER_01",
+                vehicleId = "VEHICLE_01",
+                vehicleType = ResearchVehicleProfile.TYPE,
+                vehicleMake = ResearchVehicleProfile.MAKE,
+                vehicleModel = ResearchVehicleProfile.MODEL,
+                vehicleYear = ResearchVehicleProfile.YEAR,
+                weather = TripWeather.CLEAR,
+                roadWetness = RoadWetness.DRY,
+                routeDiversion = false,
+                nonTrafficStop = NonTrafficStop.NONE,
+                contextCollectedAtMs = 1000L
+            )
+        )
+
+        db.tripDao().correctTripContext(
+            tripId = tripId,
+            routeDiversion = true,
+            nonTrafficStop = NonTrafficStop.RESEARCH_SETUP,
+            contextNote = "Confirmed after parking",
+            reason = "post-trip review"
+        )
+
+        val corrected = db.tripDao().getTripById(tripId)!!
+        assertTrue(corrected.routeDiversion)
+        assertEquals(NonTrafficStop.RESEARCH_SETUP, corrected.nonTrafficStop)
+        assertEquals("Confirmed after parking", corrected.contextNote)
+        val revisions = db.tripDao().getAllAuditRevisionsForExport()
+        assertEquals(1, revisions.size)
+        assertEquals("TRIP_CONTEXT_CORRECTION", revisions.single().revisionType)
+    }
+
+    @Test
     fun `insert and verify all row types`() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
@@ -557,4 +592,87 @@ class DatabaseSmokeTest {
         assertEquals("INCOMPLETE", quality.completeness)
         assertTrue(quality.warningsJson.contains("completed valid trip"))
     }
+
+    @Test
+    fun `preparation timeout is preserved in trip and restricted export`() = runTest {
+        val draft = TestFixtures.tripA().copy(
+            status = TripStatus.RECORDING,
+            driverId = "DRIVER_01",
+            vehicleId = "VEHICLE_01",
+            vehicleType = ResearchVehicleProfile.TYPE,
+            vehicleMake = ResearchVehicleProfile.MAKE,
+            vehicleModel = ResearchVehicleProfile.MODEL,
+            vehicleYear = ResearchVehicleProfile.YEAR,
+            weather = TripWeather.CLOUDY,
+            roadWetness = RoadWetness.DAMP,
+            nonTrafficStop = NonTrafficStop.NONE,
+            contextCollectedAtMs = 1_000L
+        )
+        val tripId = db.tripDao().insertTrip(draft)
+        db.tripDao().markTripInterrupted(
+            tripId = tripId,
+            status = TripStatus.RECOVERABLE,
+            endTimeMs = draft.startTimeMs + 120_000L,
+            endNanoTime = 120_000L,
+            reason = "PREPARATION_TIMEOUT: model not ready within 120000 ms",
+            lastWriteTimeMs = draft.startTimeMs
+        )
+        db.tripDao().upsertTripQuality(
+            TripQuality(
+                tripId = tripId,
+                warningsJson = "[\"trip interruption reason: PREPARATION_TIMEOUT\"]",
+                completeness = "INCOMPLETE"
+            )
+        )
+
+        val persisted = db.tripDao().getTripById(tripId)!!
+        assertEquals(TripStatus.RECOVERABLE, persisted.status)
+        assertEquals(
+            "PREPARATION_TIMEOUT: model not ready within 120000 ms",
+            persisted.interruptionReason
+        )
+
+        val archive = File(photoDir, "preparation-timeout-export.zip")
+        val result = ResearchExporter.writeArchive(
+            database = db,
+            trips = listOf(persisted),
+            output = archive,
+            deviceId = "test-device",
+            mode = ResearchExportMode.RESTRICTED_RAW
+        )
+        ResearchExporter.validateArchive(archive, result)
+
+        ZipFile(archive).use { zip ->
+            val tripsCsv = zip.getInputStream(zip.getEntry("trips/trips.csv"))
+                .bufferedReader()
+                .use { it.readText() }
+            val qualityJson = zip.getInputStream(zip.getEntry("qa/trips.json"))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue(tripsCsv.contains("PREPARATION_TIMEOUT"))
+            assertTrue(tripsCsv.contains("DRIVER_01"))
+            assertTrue(tripsCsv.contains("CLOUDY"))
+            assertTrue(tripsCsv.contains("DAMP"))
+            assertTrue(qualityJson.contains("INCOMPLETE"))
+        }
+
+        val publicArchive = File(photoDir, "preparation-timeout-public-export.zip")
+        val publicResult = ResearchExporter.writeArchive(
+            database = db,
+            trips = listOf(persisted),
+            output = publicArchive,
+            deviceId = "test-device",
+            mode = ResearchExportMode.PUBLIC_DEIDENTIFIED
+        )
+        ResearchExporter.validateArchive(publicArchive, publicResult)
+        ZipFile(publicArchive).use { zip ->
+            val tripsCsv = zip.getInputStream(zip.getEntry("trips/trips.csv"))
+                .bufferedReader()
+                .use { it.readText() }
+            assertTrue(tripsCsv.contains("CLOUDY"))
+            assertFalse(tripsCsv.contains("DRIVER_01"))
+            assertFalse(tripsCsv.contains("VEHICLE_01"))
+        }
+    }
+
 }

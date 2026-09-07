@@ -180,4 +180,48 @@ class DatabaseMigrationTest {
             }
         }
     }
+
+    @Test
+    fun migrateV8ToV9PreservesLegacyRowsAndLeavesContextUncollected() {
+        helper.createDatabase("migration-v8-context", 8).use { db ->
+            db.execSQL(
+                """
+                INSERT INTO trips(
+                    startTimeMs,endTimeMs,startNanoTime,endNanoTime,distanceMeters,eventCount,
+                    gpsPointCount,accelPointCount,causeBreakdown,createdAt,status,tripUuid
+                ) VALUES(1000,2000,0,0,10.0,1,1,1,'{"SIGNAL":1}',1000,0,'legacy-context')
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO trip_data(tripId,timestamp,latitude,longitude,speedKmh)
+                VALUES(1,1500,27.7,85.3,10.0)
+                """.trimIndent()
+            )
+        }
+
+        helper.runMigrationsAndValidate(
+            "migration-v8-context",
+            9,
+            true,
+            MIGRATION_8_9
+        ).use { db: SupportSQLiteDatabase ->
+            db.query(
+                "SELECT driverId, vehicleId, weather, contextCollectedAtMs, routeDiversion FROM trips"
+            ).use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.isNull(0))
+                check(cursor.isNull(1))
+                check(cursor.isNull(2))
+                check(cursor.isNull(3))
+                check(!cursor.getInt(4).toBoolean())
+            }
+            db.query("SELECT COUNT(*) FROM trip_data WHERE tripId = 1").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getInt(0) == 1)
+            }
+        }
+    }
 }
+
+private fun Int.toBoolean(): Boolean = this != 0

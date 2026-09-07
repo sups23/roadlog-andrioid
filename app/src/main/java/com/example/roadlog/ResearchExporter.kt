@@ -112,7 +112,9 @@ object ResearchExporter {
                     "id,trip_uuid,start_time_ms,end_time_ms,start_nano_time,end_nano_time," +
                         "study_date_local,time_zone_id,distance_meters,event_count,gps_point_count," +
                         "accel_point_count,status,session_id,corridor_id,direction,observation_period," +
-                        "device_id,validity_status,qa_status,qa_notes,route_diversion,recording_interruption," +
+                        "device_id,driver_id,vehicle_id,vehicle_type,vehicle_make,vehicle_model,vehicle_year," +
+                        "weather,road_wetness,validity_status,qa_status,qa_notes,route_diversion,non_traffic_stop," +
+                        "context_note,context_collected_at_ms,recording_interruption," +
                         "gps_interruption,sensor_interruption,partial_traversal,coverage_end_time_ms," +
                         "coverage_end_latitude,coverage_end_longitude,continuation_of_trip_uuid,last_write_time_ms," +
                         "write_failure_count,dropped_sample_count,interruption_reason,sensor_profile_version," +
@@ -141,10 +143,21 @@ object ResearchExporter {
                                 trip.direction,
                                 trip.observationPeriod,
                                 trip.deviceId,
+                                trip.driverId,
+                                trip.vehicleId,
+                                trip.vehicleType,
+                                trip.vehicleMake,
+                                trip.vehicleModel,
+                                trip.vehicleYear,
+                                trip.weather,
+                                trip.roadWetness,
                                 trip.validityStatus,
                                 trip.qaStatus,
                                 trip.qaNotes,
                                 trip.routeDiversion,
+                                trip.nonTrafficStop,
+                                trip.contextNote,
+                                trip.contextCollectedAtMs,
                                 trip.recordingInterruption,
                                 trip.gpsInterruption,
                                 trip.sensorInterruption,
@@ -174,7 +187,8 @@ object ResearchExporter {
             } else {
                 val tripsCsv = StringBuilder(
                     "trip_uuid,duration_ms,distance_meters,event_count,gps_point_count,accel_point_count," +
-                        "status,direction,observation_period,validity_status,qa_status,route_diversion," +
+                        "status,direction,observation_period,vehicle_type,vehicle_make,vehicle_model,vehicle_year," +
+                        "weather,road_wetness,validity_status,qa_status,route_diversion,non_traffic_stop,context_collected," +
                         "recording_interruption,gps_interruption,sensor_interruption,partial_traversal," +
                         "exclusion_code,sensor_profile_version,export_format_version,protocol_version," +
                         "cause_config_path,codebook_version,app_version,schema_version\n"
@@ -192,9 +206,17 @@ object ResearchExporter {
                                 trip.status,
                                 trip.direction,
                                 trip.observationPeriod,
+                                trip.vehicleType,
+                                trip.vehicleMake,
+                                trip.vehicleModel,
+                                trip.vehicleYear,
+                                trip.weather,
+                                trip.roadWetness,
                                 trip.validityStatus,
                                 trip.qaStatus,
                                 trip.routeDiversion,
+                                trip.nonTrafficStop,
+                                trip.contextCollectedAtMs != null,
                                 trip.recordingInterruption,
                                 trip.gpsInterruption,
                                 trip.sensorInterruption,
@@ -734,6 +756,9 @@ object ResearchExporter {
                     put("version", ResearchCodebook.VERSION)
                     put("primary_codes", JSONArray(ResearchCodebook.primaryCodes.toList().sorted()))
                     put("traffic_states", JSONArray(ResearchCodebook.trafficStates.toList().sorted()))
+                    put("weather", JSONArray(TripWeather.values))
+                    put("road_wetness", JSONArray(RoadWetness.values))
+                    put("non_traffic_stop", JSONArray(NonTrafficStop.values))
                 }.toString()
             )
             textEntry(
@@ -744,12 +769,17 @@ object ResearchExporter {
                     put("protocol_version", ResearchVersions.PROTOCOL_VERSION)
                     put("mode", mode.archiveLabel)
                     put("raw_fields_authoritative", restricted)
-                    put("timestamp_units", JSONObject().apply {
-                        put("epoch", "milliseconds")
-                        put("elapsed_realtime", "nanoseconds")
-                        put("sensor", "nanoseconds")
-                    })
-                }.toString()
+                     put("timestamp_units", JSONObject().apply {
+                         put("epoch", "milliseconds")
+                         put("elapsed_realtime", "nanoseconds")
+                         put("sensor", "nanoseconds")
+                     })
+                     put("trip_context_fields", JSONArray(listOf(
+                         "driver_id", "vehicle_id", "vehicle_type", "vehicle_make", "vehicle_model",
+                         "vehicle_year", "weather", "road_wetness", "route_diversion",
+                         "non_traffic_stop", "context_note", "context_collected_at_ms"
+                     )))
+                 }.toString()
             )
 
             val manifest = JSONObject().apply {

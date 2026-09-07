@@ -108,7 +108,18 @@ data class Trip(
     val exportFormatVersion: String? = null,
     val protocolVersion: String? = null,
     val causeConfigJson: String? = null,
-    val exclusionCode: String? = null
+    val exclusionCode: String? = null,
+    val driverId: String? = null,
+    val vehicleId: String? = null,
+    val vehicleType: String? = null,
+    val vehicleMake: String? = null,
+    val vehicleModel: String? = null,
+    val vehicleYear: Int? = null,
+    val weather: String? = null,
+    val roadWetness: String? = null,
+    val nonTrafficStop: String? = null,
+    val contextNote: String? = null,
+    val contextCollectedAtMs: Long? = null
 )
 
 @Entity(
@@ -582,6 +593,9 @@ interface TripDao {
     @Query("SELECT * FROM audit_revisions ORDER BY revisionTimeMs, revisionId")
     suspend fun getAllAuditRevisionsForExport(): List<AuditRevision>
 
+    @Query("SELECT * FROM audit_revisions WHERE tripId = :tripId ORDER BY revisionTimeMs, revisionId")
+    suspend fun getAuditRevisionsForTrip(tripId: Long): List<AuditRevision>
+
     @Query("SELECT * FROM trip_audio ORDER BY startTimeMs, audioId")
     suspend fun getAllAudioForExport(): List<TripAudio>
 
@@ -672,6 +686,52 @@ interface TripDao {
 
     @Query("UPDATE trips SET exclusionCode = :exclusionCode WHERE id = :tripId")
     suspend fun updateTripExclusionCode(tripId: Long, exclusionCode: String?): Int
+
+    @Query("""
+        UPDATE trips SET routeDiversion = :routeDiversion, nonTrafficStop = :nonTrafficStop,
+        contextNote = :contextNote WHERE id = :tripId AND status != ${TripStatus.RECORDING}
+    """)
+    suspend fun updateTripContextCorrection(
+        tripId: Long,
+        routeDiversion: Boolean,
+        nonTrafficStop: String?,
+        contextNote: String?
+    ): Int
+
+    @Transaction
+    suspend fun correctTripContext(
+        tripId: Long,
+        routeDiversion: Boolean,
+        nonTrafficStop: String?,
+        contextNote: String?,
+        editor: String? = null,
+        reason: String? = null
+    ) {
+        val trip = getTripById(tripId) ?: error("trip $tripId does not exist")
+        check(trip.status != TripStatus.RECORDING) { "active trip context is readonly" }
+        insertAuditRevision(
+            AuditRevision(
+                revisionId = UUID.randomUUID().toString(),
+                tripId = tripId,
+                fieldName = "trip_context",
+                originalValue = JSONObject().apply {
+                    put("route_diversion", trip.routeDiversion)
+                    put("non_traffic_stop", trip.nonTrafficStop)
+                    put("context_note", trip.contextNote)
+                }.toString(),
+                currentValue = JSONObject().apply {
+                    put("route_diversion", routeDiversion)
+                    put("non_traffic_stop", nonTrafficStop)
+                    put("context_note", contextNote)
+                }.toString(),
+                editor = editor,
+                revisionTimeMs = System.currentTimeMillis(),
+                reason = reason,
+                revisionType = "TRIP_CONTEXT_CORRECTION"
+            )
+        )
+        check(updateTripContextCorrection(tripId, routeDiversion, nonTrafficStop, contextNote) == 1)
+    }
 
     @Query("SELECT * FROM trips WHERE status = ${TripStatus.RECORDING}")
     suspend fun getAbandonedTrips(): List<Trip>
@@ -1514,6 +1574,22 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN driverId TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN vehicleId TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN vehicleType TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN vehicleMake TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN vehicleModel TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN vehicleYear INTEGER")
+        db.execSQL("ALTER TABLE trips ADD COLUMN weather TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN roadWetness TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN nonTrafficStop TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN contextNote TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN contextCollectedAtMs INTEGER")
+    }
+}
+
 @Database(
     entities = [
         TripData::class,
@@ -1526,7 +1602,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         AuditRevision::class,
         EventAnnotationRevision::class
     ],
-    version = 8
+    version = 9
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tripDao(): TripDao
@@ -1549,7 +1625,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .build()
                 INSTANCE = instance

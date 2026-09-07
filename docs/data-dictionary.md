@@ -27,6 +27,21 @@ fields, interruption fields, version fields, `cause_config_path`, and
 version fields, and `cause_config_path`, but no absolute time, local ID, device
 ID, coordinates, or free-text notes.
 
+Trip context fields are captured on new drafts before Vosk preparation. Restricted
+exports include `driver_id`, `vehicle_id`, vehicle profile fields, `weather`,
+`road_wetness`, `route_diversion`, `non_traffic_stop`, `context_note`, and
+`context_collected_at_ms`. Public exports include vehicle profile and the
+non-identifying category fields plus `context_collected`; driver/vehicle IDs and
+the free-text context note are omitted. `context_collected_at_ms` is null for
+historical rows created before this context contract, so those rows must not be
+interpreted as having collected `route_diversion=NO`.
+
+Allowed context values are weather `CLEAR`, `CLOUDY`, `LIGHT_RAIN`, `HEAVY_RAIN`,
+`OTHER`; road wetness `DRY`, `DAMP`, `WET`, `STANDING_WATER`, `UNKNOWN`; and
+non-traffic stop `NONE`, `PERSONAL`, `FUEL_OR_MAINTENANCE`, `RESEARCH_SETUP`,
+`POLICE_OR_ADMINISTRATIVE`, `OTHER`. `INCIDENT_OR_BREAKDOWN` remains an
+exclusion code and is never a cause value.
+
 `exclusion_code` is nullable or `INCIDENT_OR_BREAKDOWN`. It excludes a trip from
 analysis without deleting its raw data.
 

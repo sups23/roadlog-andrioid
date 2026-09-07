@@ -101,5 +101,16 @@
             android:text="Audio fail"
             android:textColor="@android:color/white"
             android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/configureVoskPreparationButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:backgroundTint="@color/purple_700"
+            android:text="Vosk timeout"
+            android:textColor="@android:color/white"
+            android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>
