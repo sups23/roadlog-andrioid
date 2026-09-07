@@ -1,7 +1,10 @@
 package com.example.roadlog
 
 import android.graphics.BitmapFactory
+import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -12,6 +15,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -28,13 +32,16 @@ import kotlinx.coroutines.*
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.io.File
 
 class TripDetailActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RoadLog"
-        private const val VISUAL_ROW_LIMIT = 5_000
         private const val VISUAL_SENSOR_LIMIT = 30_000
+        private const val AUDIO_PROGRESS_UPDATE_MS = 250L
+        private const val AUDIO_SEEK_STEP_MS = 10_000
+        private const val AUDIO_RESTART_THRESHOLD_MS = 3_000
     }
 
     private lateinit var database: AppDatabase
@@ -49,6 +56,8 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var qaValidButton: Button
     private lateinit var qaWarningsButton: Button
     private lateinit var qaInvalidButton: Button
+    private lateinit var incidentExclusionCheckBox: CheckBox
+    private lateinit var saveExclusionButton: Button
     private lateinit var breakdownContainer: LinearLayout
     private lateinit var timelineContainer: LinearLayout
     private lateinit var speedChart: LineChart
@@ -62,6 +71,18 @@ class TripDetailActivity : AppCompatActivity() {
     private lateinit var contentScrollView: ScrollView
     private lateinit var loadingProgressBar: ProgressBar
     private lateinit var loadingStatusText: TextView
+    private lateinit var audioControlsContainer: LinearLayout
+    private lateinit var audioSegmentsContainer: LinearLayout
+    private lateinit var audioNowPlayingText: TextView
+    private lateinit var audioElapsedText: TextView
+    private lateinit var audioDurationText: TextView
+    private lateinit var audioProgressSeekBar: SeekBar
+    private lateinit var audioPreviousButton: Button
+    private lateinit var audioRewindButton: Button
+    private lateinit var audioPlayPauseButton: Button
+    private lateinit var audioForwardButton: Button
+    private lateinit var audioNextButton: Button
+    private lateinit var audioPlayAllButton: Button
 
     private var tripId: Long = -1
     private var tripStart: Long = 0
@@ -71,6 +92,23 @@ class TripDetailActivity : AppCompatActivity() {
     private var gpsRouteData: List<TripData> = emptyList()
     private var worldAccelData: List<WorldAccelSample> = emptyList()
     private var worldGyroData: List<WorldGyroSample> = emptyList()
+    private var audioSegments: List<TripAudio> = emptyList()
+    private var audioPlayer: MediaPlayer? = null
+    private var playingAudioIndex = -1
+    private var playAllAudio = false
+    private var audioPrepared = false
+    private var audioCompleted = false
+    private var audioPlaylistCompleted = false
+    private val audioSegmentPlayButtons = mutableListOf<Button>()
+    private val audioProgressHandler = Handler(Looper.getMainLooper())
+    private val audioProgressRunnable = object : Runnable {
+        override fun run() {
+            updateAudioProgress()
+            if (isAudioPlaying()) {
+                audioProgressHandler.postDelayed(this, AUDIO_PROGRESS_UPDATE_MS)
+            }
+        }
+    }
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val dateFormatter = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
@@ -101,6 +139,8 @@ class TripDetailActivity : AppCompatActivity() {
         qaValidButton = findViewById(R.id.qaValidButton)
         qaWarningsButton = findViewById(R.id.qaWarningsButton)
         qaInvalidButton = findViewById(R.id.qaInvalidButton)
+        incidentExclusionCheckBox = findViewById(R.id.incidentExclusionCheckBox)
+        saveExclusionButton = findViewById(R.id.saveExclusionButton)
         breakdownContainer = findViewById(R.id.breakdownContainer)
         timelineContainer = findViewById(R.id.timelineContainer)
         speedChart = findViewById(R.id.speedChart)
@@ -114,6 +154,18 @@ class TripDetailActivity : AppCompatActivity() {
         contentScrollView = findViewById(R.id.contentScrollView)
         loadingProgressBar = findViewById(R.id.loadingProgressBar)
         loadingStatusText = findViewById(R.id.loadingStatusText)
+        audioControlsContainer = findViewById(R.id.audioControlsContainer)
+        audioSegmentsContainer = findViewById(R.id.audioSegmentsContainer)
+        audioNowPlayingText = findViewById(R.id.audioNowPlayingText)
+        audioElapsedText = findViewById(R.id.audioElapsedText)
+        audioDurationText = findViewById(R.id.audioDurationText)
+        audioProgressSeekBar = findViewById(R.id.audioProgressSeekBar)
+        audioPreviousButton = findViewById(R.id.audioPreviousButton)
+        audioRewindButton = findViewById(R.id.audioRewindButton)
+        audioPlayPauseButton = findViewById(R.id.audioPlayPauseButton)
+        audioForwardButton = findViewById(R.id.audioForwardButton)
+        audioNextButton = findViewById(R.id.audioNextButton)
+        audioPlayAllButton = findViewById(R.id.audioPlayAllButton)
 
         setupChart(speedChart, "Speed (km/h)")
         setupChart(roughnessChart, "Vertical roughness (m/s²)")
@@ -126,6 +178,8 @@ class TripDetailActivity : AppCompatActivity() {
         qaValidButton.setOnClickListener { updateQaStatus(TripQaStatus.VALID) }
         qaWarningsButton.setOnClickListener { updateQaStatus(TripQaStatus.VALID_WITH_WARNINGS) }
         qaInvalidButton.setOnClickListener { updateQaStatus(TripQaStatus.INVALID) }
+        saveExclusionButton.setOnClickListener { saveExclusionDecision() }
+        setupAudioControls()
         showLoading(true)
 
         if (tripId == -1L || tripStart == 0L || tripEnd == 0L) {
@@ -151,12 +205,14 @@ class TripDetailActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         Log.d(TAG, "onStop")
+        releaseAudioPlayer()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy")
         scope.cancel()
+        releaseAudioPlayer()
     }
 
     override fun onSupportNavigateUp(): Boolean {
@@ -198,7 +254,7 @@ class TripDetailActivity : AppCompatActivity() {
                 setStatus("Querying GPS and sensor data...")
                 val dbStart = System.currentTimeMillis()
                 val gpsData = withContext(Dispatchers.IO) {
-                    database.tripDao().getGpsForTripCapped(tripId, tripStart, tripEnd, VISUAL_ROW_LIMIT)
+                    database.tripDao().getGpsForMap(tripId)
                 }
                 gpsRouteData = gpsData
                 val events = withContext(Dispatchers.IO) { database.tripDao().getTripEvents(tripId) }
@@ -213,6 +269,12 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 val photos = withContext(Dispatchers.IO) {
                     database.tripDao().getPhotosForTrip(tripId)
+                }
+                val audio = withContext(Dispatchers.IO) {
+                    database.tripDao().getAudioForTrip(tripId)
+                }
+                val quality = withContext(Dispatchers.IO) {
+                    database.tripDao().getAllTripQuality().firstOrNull { it.tripId == tripId }
                 }
                 Log.d(TAG, "DB queries took ${System.currentTimeMillis() - dbStart}ms; gps=${gpsData.size}, events=${events.size}, accel=${accelData.size}, gyro=${gyroData.size}, rot=${rotationData.size}, photos=${photos.size}")
                 ensureActive()
@@ -229,7 +291,7 @@ class TripDetailActivity : AppCompatActivity() {
                 ensureActive()
 
                 setStatus("Preparing charts...")
-                bindHeader(trip, gpsData)
+                bindHeader(trip, gpsData, quality)
                 bindBreakdown(trip.causeBreakdown)
                 bindTimeline(events, trip.startTimeMs)
                 bindSpeedChart(gpsData)
@@ -238,6 +300,7 @@ class TripDetailActivity : AppCompatActivity() {
                 bindLongitudinalChart(worldAccel)
                 bindYawChart(worldGyro)
                 bindPhotos(photos)
+                bindAudio(audio)
 
                 showLoading(false)
             } catch (e: CancellationException) {
@@ -282,11 +345,405 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun showRouteMap() {
-        if (gpsRouteData.isEmpty()) return
-        RouteMapDialogFragment.show(this, gpsRouteData, worldAccelData, worldGyroData)
+        RouteMapDialogFragment.show(this, tripId, worldAccelData, worldGyroData)
     }
 
-    private fun bindHeader(trip: Trip, gpsData: List<TripData>) {
+    private fun setupAudioControls() {
+        audioProgressSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) audioElapsedText.text = formatAudioDuration(progress.toLong())
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                audioProgressHandler.removeCallbacks(audioProgressRunnable)
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val player = audioPlayer ?: return
+                if (!audioPrepared) return
+                try {
+                    val durationMs = safePlayerDuration(player)
+                    val positionMs = audioProgressSeekBar.progress.coerceIn(0, durationMs)
+                    player.seekTo(positionMs)
+                    audioCompleted = durationMs > 0 && positionMs >= durationMs
+                    updateAudioProgress()
+                    if (isAudioPlaying()) scheduleAudioProgress()
+                } catch (error: IllegalStateException) {
+                    Log.w(TAG, "Could not seek audio", error)
+                }
+            }
+        })
+        audioPreviousButton.setOnClickListener { playPreviousAudioSegment() }
+        audioRewindButton.setOnClickListener { seekAudioBy(-AUDIO_SEEK_STEP_MS) }
+        audioPlayPauseButton.setOnClickListener { toggleAudioPlayback() }
+        audioForwardButton.setOnClickListener { seekAudioBy(AUDIO_SEEK_STEP_MS) }
+        audioNextButton.setOnClickListener { playNextAudioSegment() }
+        audioPlayAllButton.setOnClickListener { togglePlayAllAudio() }
+    }
+
+    private fun bindAudio(segments: List<TripAudio>) {
+        releaseAudioPlayer()
+        audioSegments = segments
+        audioSegmentPlayButtons.clear()
+        audioSegmentsContainer.removeAllViews()
+        if (segments.isEmpty()) {
+            audioControlsContainer.visibility = View.GONE
+            audioSegmentsContainer.addView(TextView(this).apply {
+                text = "No audio recordings saved"
+            })
+            return
+        }
+
+        audioControlsContainer.visibility = View.VISIBLE
+        segments.forEachIndexed { index, segment ->
+            val file = File(segment.filePath)
+            val available = file.isFile && file.length() > 0L
+            val duration = if (segment.endTimeMs != null) {
+                formatAudioDuration(segment.endTimeMs - segment.startTimeMs)
+            } else "duration pending"
+            audioSegmentsContainer.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(TextView(this@TripDetailActivity).apply {
+                    text = buildString {
+                        append("Segment ${segment.segmentSequence + 1} · $duration · ${segment.status}")
+                        if (!available) append(" · unavailable")
+                    }
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                val playButton = Button(this@TripDetailActivity).apply {
+                    text = "Play"
+                    isEnabled = available
+                    setOnClickListener {
+                        if (playingAudioIndex == index) {
+                            toggleAudioPlayback()
+                        } else {
+                            playAllAudio = false
+                            playAudioSegment(index)
+                        }
+                    }
+                }
+                audioSegmentPlayButtons += playButton
+                addView(playButton)
+            })
+        }
+        updateAudioControls()
+    }
+
+    private fun playAudioSegment(index: Int) {
+        val playableIndex = when {
+            index in audioSegments.indices && isAudioFileAvailable(index) -> index
+            playAllAudio -> findNextPlayableAudioIndex(index)
+            else -> null
+        }
+        if (playableIndex == null) {
+            if (playAllAudio) playAllAudio = false
+            updateAudioControls()
+            Toast.makeText(this, "No playable audio segments found", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (playingAudioIndex == playableIndex && audioPlayer != null) {
+            startAudioPlayback()
+            return
+        }
+
+        val continueAll = playAllAudio
+        releaseAudioPlayer()
+        playAllAudio = continueAll
+        audioPlaylistCompleted = false
+        playingAudioIndex = playableIndex
+        audioControlsContainer.visibility = View.VISIBLE
+        updateAudioControls()
+
+        val file = File(audioSegments[playableIndex].filePath)
+        val player = MediaPlayer()
+        audioPlayer = player
+        try {
+            player.setDataSource(file.absolutePath)
+            player.setOnPreparedListener { preparedPlayer ->
+                if (audioPlayer !== preparedPlayer || playingAudioIndex != playableIndex) {
+                    preparedPlayer.release()
+                    return@setOnPreparedListener
+                }
+                audioPrepared = true
+                audioCompleted = false
+                val durationMs = safePlayerDuration(preparedPlayer)
+                audioProgressSeekBar.max = durationMs.coerceAtLeast(1)
+                audioDurationText.text = formatAudioDuration(durationMs.toLong())
+                startAudioPlayback()
+                updateAudioControls()
+            }
+            player.setOnCompletionListener {
+                audioProgressHandler.removeCallbacks(audioProgressRunnable)
+                audioCompleted = true
+                updateAudioProgress()
+                if (playAllAudio) {
+                    val nextIndex = findNextPlayableAudioIndex(playableIndex + 1)
+                    if (nextIndex != null) {
+                        playAudioSegment(nextIndex)
+                    } else {
+                        playAllAudio = false
+                        audioPlaylistCompleted = true
+                        updateAudioControls()
+                    }
+                } else {
+                    updateAudioControls()
+                }
+            }
+            player.setOnErrorListener { _, _, _ ->
+                val continueAllAfterError = playAllAudio
+                playAllAudio = false
+                releaseAudioPlayer()
+                Toast.makeText(this@TripDetailActivity, "Could not play audio segment", Toast.LENGTH_SHORT).show()
+                if (continueAllAfterError) {
+                    playAllAudio = true
+                    val nextIndex = findNextPlayableAudioIndex(playableIndex + 1)
+                    if (nextIndex != null) playAudioSegment(nextIndex) else playAllAudio = false
+                }
+                updateAudioControls()
+                true
+            }
+            player.prepareAsync()
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not start audio playback", error)
+            if (audioPlayer === player) releaseAudioPlayer()
+            Toast.makeText(this, "Could not play audio segment", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun togglePlayAllAudio() {
+        if (audioSegments.isEmpty()) return
+        if (playAllAudio) {
+            releaseAudioPlayer()
+            return
+        }
+
+        playAllAudio = true
+        val restartPlaylist = audioPlaylistCompleted
+        audioPlaylistCompleted = false
+        val index = if (!restartPlaylist && playingAudioIndex in audioSegments.indices) {
+            playingAudioIndex
+        } else {
+            findNextPlayableAudioIndex(0)
+        }
+        if (index == null) {
+            playAllAudio = false
+            updateAudioControls()
+            Toast.makeText(this, "No playable audio segments found", Toast.LENGTH_SHORT).show()
+        } else if (audioPlayer != null && playingAudioIndex == index) {
+            startAudioPlayback()
+        } else {
+            playAudioSegment(index)
+        }
+    }
+
+    private fun toggleAudioPlayback() {
+        if (audioPlayer == null) {
+            val index = if (playingAudioIndex in audioSegments.indices) {
+                playingAudioIndex
+            } else {
+                findNextPlayableAudioIndex(0)
+            }
+            if (index != null) playAudioSegment(index)
+            return
+        }
+        if (!audioPrepared) return
+        if (isAudioPlaying()) {
+            try {
+                audioPlayer?.pause()
+            } catch (error: IllegalStateException) {
+                Log.w(TAG, "Could not pause audio", error)
+            }
+            audioProgressHandler.removeCallbacks(audioProgressRunnable)
+        } else {
+            startAudioPlayback()
+        }
+        updateAudioControls()
+    }
+
+    private fun startAudioPlayback() {
+        val player = audioPlayer ?: return
+        if (!audioPrepared) return
+        try {
+            if (audioCompleted) {
+                player.seekTo(0)
+                audioCompleted = false
+            } else if (safePlayerDuration(player) > 0 && currentAudioPosition() >= safePlayerDuration(player)) {
+                player.seekTo(0)
+            }
+            player.start()
+            scheduleAudioProgress()
+        } catch (error: IllegalStateException) {
+            Log.w(TAG, "Could not start audio", error)
+        }
+        updateAudioControls()
+    }
+
+    private fun playPreviousAudioSegment() {
+        val currentIndex = playingAudioIndex
+        if (currentIndex !in audioSegments.indices) return
+        if (currentAudioPosition() > AUDIO_RESTART_THRESHOLD_MS) {
+            seekAudioTo(0)
+            return
+        }
+        findPreviousPlayableAudioIndex(currentIndex - 1)?.let { playAudioSegment(it) }
+    }
+
+    private fun playNextAudioSegment() {
+        val currentIndex = playingAudioIndex
+        val nextIndex = findNextPlayableAudioIndex(if (currentIndex >= 0) currentIndex + 1 else 0)
+        if (nextIndex == null) {
+            playAllAudio = false
+            updateAudioControls()
+        } else {
+            playAudioSegment(nextIndex)
+        }
+    }
+
+    private fun seekAudioBy(deltaMs: Int) {
+        if (!audioPrepared) return
+        val player = audioPlayer ?: return
+        val durationMs = safePlayerDuration(player)
+        seekAudioTo((currentAudioPosition() + deltaMs).coerceIn(0, durationMs))
+    }
+
+    private fun seekAudioTo(positionMs: Int) {
+        val player = audioPlayer ?: return
+        if (!audioPrepared) return
+        try {
+            val durationMs = safePlayerDuration(player)
+            val targetPositionMs = positionMs.coerceIn(0, durationMs)
+            player.seekTo(targetPositionMs)
+            audioCompleted = durationMs > 0 && targetPositionMs >= durationMs
+            updateAudioProgress()
+        } catch (error: IllegalStateException) {
+            Log.w(TAG, "Could not seek audio", error)
+        }
+    }
+
+    private fun findNextPlayableAudioIndex(startIndex: Int): Int? {
+        return (startIndex.coerceAtLeast(0) until audioSegments.size)
+            .firstOrNull(::isAudioFileAvailable)
+    }
+
+    private fun findPreviousPlayableAudioIndex(startIndex: Int): Int? {
+        if (audioSegments.isEmpty()) return null
+        return (startIndex.coerceAtMost(audioSegments.lastIndex) downTo 0)
+            .firstOrNull(::isAudioFileAvailable)
+    }
+
+    private fun isAudioFileAvailable(index: Int): Boolean {
+        if (index !in audioSegments.indices) return false
+        val file = File(audioSegments[index].filePath)
+        return file.isFile && file.length() > 0L
+    }
+
+    private fun scheduleAudioProgress() {
+        audioProgressHandler.removeCallbacks(audioProgressRunnable)
+        audioProgressHandler.post(audioProgressRunnable)
+    }
+
+    private fun updateAudioProgress() {
+        val player = audioPlayer
+        if (player == null || !audioPrepared) return
+        val durationMs = safePlayerDuration(player)
+        val positionMs = currentAudioPosition().coerceIn(0, durationMs)
+        audioProgressSeekBar.max = durationMs.coerceAtLeast(1)
+        audioProgressSeekBar.progress = positionMs
+        audioElapsedText.text = formatAudioDuration(positionMs.toLong())
+        audioDurationText.text = formatAudioDuration(durationMs.toLong())
+    }
+
+    private fun updateAudioControls() {
+        if (audioSegments.isEmpty()) return
+        val selected = playingAudioIndex in audioSegments.indices
+        val isPlaying = isAudioPlaying()
+        audioNowPlayingText.text = if (selected) {
+            "Segment ${audioSegments[playingAudioIndex].segmentSequence + 1} of ${audioSegments.size}"
+        } else {
+            "Select a segment to play"
+        }
+        audioProgressSeekBar.isEnabled = audioPrepared
+        audioPlayPauseButton.isEnabled = audioPrepared
+        audioPlayPauseButton.text = when {
+            isPlaying -> "Pause"
+            audioCompleted -> "Replay"
+            else -> "Play"
+        }
+        audioPreviousButton.isEnabled = selected && (
+            currentAudioPosition() > AUDIO_RESTART_THRESHOLD_MS ||
+                findPreviousPlayableAudioIndex(playingAudioIndex - 1) != null
+            )
+        audioRewindButton.isEnabled = audioPrepared
+        audioForwardButton.isEnabled = audioPrepared
+        audioNextButton.isEnabled = selected && findNextPlayableAudioIndex(playingAudioIndex + 1) != null
+        audioPlayAllButton.isEnabled = audioSegments.indices.any(::isAudioFileAvailable)
+        audioPlayAllButton.text = if (playAllAudio) "Stop playlist" else "Play all segments"
+        audioSegmentPlayButtons.forEachIndexed { index, button ->
+            button.isEnabled = isAudioFileAvailable(index)
+            button.text = when {
+                index == playingAudioIndex && !audioPrepared && audioPlayer != null -> "Loading"
+                index == playingAudioIndex && isPlaying -> "Pause"
+                else -> "Play"
+            }
+        }
+    }
+
+    private fun isAudioPlaying(): Boolean {
+        return try {
+            audioPlayer?.isPlaying == true
+        } catch (_: IllegalStateException) {
+            false
+        }
+    }
+
+    private fun currentAudioPosition(): Int {
+        return try {
+            audioPlayer?.currentPosition ?: 0
+        } catch (_: IllegalStateException) {
+            0
+        }
+    }
+
+    private fun safePlayerDuration(player: MediaPlayer): Int {
+        return try {
+            player.duration.coerceAtLeast(0)
+        } catch (_: IllegalStateException) {
+            0
+        }
+    }
+
+    private fun releaseAudioPlayer() {
+        audioProgressHandler.removeCallbacks(audioProgressRunnable)
+        audioPlayer?.setOnCompletionListener(null)
+        audioPlayer?.setOnPreparedListener(null)
+        audioPlayer?.setOnErrorListener(null)
+        audioPlayer?.release()
+        audioPlayer = null
+        audioPrepared = false
+        audioCompleted = false
+        audioPlaylistCompleted = false
+        playingAudioIndex = -1
+        playAllAudio = false
+        audioElapsedText.text = formatAudioDuration(0)
+        audioDurationText.text = formatAudioDuration(0)
+        audioProgressSeekBar.max = 1
+        audioProgressSeekBar.progress = 0
+        audioProgressSeekBar.isEnabled = false
+        updateAudioControls()
+    }
+
+    private fun formatAudioDuration(durationMs: Long): String {
+        val seconds = TimeUnit.MILLISECONDS.toSeconds(durationMs.coerceAtLeast(0L))
+        return if (seconds >= 60 * 60) {
+            String.format(Locale.getDefault(), "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", seconds / 60, seconds % 60)
+        }
+    }
+
+    private fun bindHeader(trip: Trip, gpsData: List<TripData>, quality: TripQuality?) {
         Log.d(TAG, "bindHeader: gps=${gpsData.size}")
         dateText.text = dateFormatter.format(Date(trip.startTimeMs))
         researchText.text = listOfNotNull(
@@ -295,8 +752,17 @@ class TripDetailActivity : AppCompatActivity() {
             "Direction: ${trip.direction ?: "unknown"}",
             "Period: ${trip.observationPeriod ?: "unknown"}",
             "QA: ${trip.qaStatus}",
+            quality?.let { qualityRecord ->
+                val warnings = runCatching {
+                    org.json.JSONArray(qualityRecord.warningsJson)
+                        .let { json -> (0 until json.length()).map(json::getString) }
+                }.getOrDefault(emptyList())
+                "Completeness: ${qualityRecord.completeness}" +
+                    warnings.takeIf { it.isNotEmpty() }?.let { "\nWarnings: ${it.joinToString(" | ")}" }.orEmpty()
+            },
             if (trip.partialTraversal) "Partial coverage until ${trip.coverageEndTimeMs ?: trip.endTimeMs}" else null,
-            trip.interruptionReason?.let { "Interruption: $it" }
+            trip.interruptionReason?.let { "Interruption: $it" },
+            trip.exclusionCode?.let { "Excluded from analysis: $it" }
         ).joinToString("\n")
 
         val minutes = TimeUnit.MILLISECONDS.toMinutes(trip.endTimeMs - trip.startTimeMs)
@@ -322,6 +788,7 @@ class TripDetailActivity : AppCompatActivity() {
 
         eventsText.text = "Events: ${trip.eventCount}"
         qaActionsContainer.visibility = if (trip.qaStatus == TripQaStatus.UNREVIEWED) View.VISIBLE else View.GONE
+        incidentExclusionCheckBox.isChecked = trip.exclusionCode == TripExclusion.INCIDENT_OR_BREAKDOWN
     }
 
     private fun updateQaStatus(status: String) {
@@ -339,6 +806,30 @@ class TripDetailActivity : AppCompatActivity() {
                 loadTripDetails()
             } catch (error: Exception) {
                 Log.e(TAG, "Could not update trip QA", error)
+            }
+        }
+    }
+
+    private fun saveExclusionDecision() {
+        val exclusionCode = if (incidentExclusionCheckBox.isChecked) {
+            TripExclusion.INCIDENT_OR_BREAKDOWN
+        } else {
+            null
+        }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    check(database.tripDao().updateTripExclusionCode(tripId, exclusionCode) == 1)
+                }
+                Toast.makeText(
+                    this@TripDetailActivity,
+                    if (exclusionCode == null) "Trip included in analysis" else "Trip marked INCIDENT_OR_BREAKDOWN and excluded from analysis",
+                    Toast.LENGTH_LONG
+                ).show()
+                loadTripDetails()
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not save trip exclusion", error)
+                Toast.makeText(this@TripDetailActivity, "Exclusion decision was not saved", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -405,7 +896,8 @@ class TripDetailActivity : AppCompatActivity() {
 
             val row = TextView(this).apply {
                 val cause = event.primaryCauseCode?.let(::displayCause) ?: "UNANNOTATED"
-                text = "$timeText · $cause · ${event.status} · ${event.provenance}"
+                val provisional = event.provisionalCauseCode?.let { " · provisional ${displayCause(it)}" }.orEmpty()
+                text = "$timeText · $cause$provisional · ${event.status} · ${event.provenance}"
                 textSize = 15f
                 setPadding(0, 8, 0, 8)
                 setOnClickListener { showAnnotationDialog(event) }
@@ -415,7 +907,7 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun displayCause(code: String): String = when (code) {
-        ResearchCodebook.UNCLASSIFIED_CODE -> "UNCLASSIFIED"
+        ResearchCodebook.UNKNOWN_CODE -> "UNKNOWN"
         else -> code
     }
 
@@ -452,10 +944,6 @@ class TripDetailActivity : AppCompatActivity() {
         val causes = ResearchCodebook.primaryCodes.toList().sorted()
         label("Primary cause")
         val primary = spinner(causes)
-        label("Secondary cause 1")
-        val secondary1 = spinner(listOf("None") + causes)
-        label("Secondary cause 2")
-        val secondary2 = spinner(listOf("None") + causes)
         label("Traffic state")
         val traffic = spinner(listOf("Unspecified") + ResearchCodebook.trafficStates.toList().sorted())
         label("Confidence")
@@ -487,8 +975,6 @@ class TripDetailActivity : AppCompatActivity() {
 
         val existingPrimary = (existing?.primaryCauseCode ?: event.primaryCauseCode)?.let { causes.indexOf(it) } ?: 0
         primary.setSelection(existingPrimary.coerceAtLeast(0))
-        secondary1.setSelection((existing?.secondaryCause1?.let { causes.indexOf(it) }?.takeIf { it >= 0 }?.plus(1) ?: 0))
-        secondary2.setSelection((existing?.secondaryCause2?.let { causes.indexOf(it) }?.takeIf { it >= 0 }?.plus(1) ?: 0))
         confidence.setSelection((existing?.confidenceCode ?: event.confidenceCode ?: 0).coerceIn(0, 3))
         (existing?.trafficState ?: event.trafficState)?.let { state ->
             val index = ResearchCodebook.trafficStates.toList().sorted().indexOf(state)
@@ -500,9 +986,6 @@ class TripDetailActivity : AppCompatActivity() {
             .setView(form)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save") { _, _ ->
-                val secondaryCodes = listOf(secondary1, secondary2)
-                    .map { it.selectedItem.toString() }
-                    .filter { it != "None" }
                 val trafficState = traffic.selectedItem.toString().takeUnless { it == "Unspecified" }
                 scope.launch {
                     try {
@@ -511,7 +994,6 @@ class TripDetailActivity : AppCompatActivity() {
                                 eventId = event.eventId,
                                 annotation = EventAnnotation(
                                     primaryCauseCode = primary.selectedItem.toString(),
-                                    secondaryCauseCodes = secondaryCodes,
                                     confidenceCode = confidence.selectedItem.toString().toInt(),
                                     trafficState = trafficState,
                                     notes = notes.text.toString().trim().takeIf { it.isNotEmpty() }
@@ -724,14 +1206,17 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun confirmDelete() {
-        if (currentQaStatus != TripQaStatus.UNREVIEWED) {
-            Toast.makeText(this, "Reviewed research trips are retained; export before controlled deletion.", Toast.LENGTH_LONG).show()
-            return
-        }
+        val reviewed = currentQaStatus != TripQaStatus.UNREVIEWED
         AlertDialog.Builder(this)
-            .setTitle("Delete trip?")
-            .setMessage("This will remove the trip record, photos, and all its stored data.")
-            .setPositiveButton("Delete") { _, _ ->
+            .setTitle(if (reviewed) "Purge reviewed trip?" else "Delete trip?")
+            .setMessage(
+                if (reviewed) {
+                    "This researcher-initiated purge irreversibly removes the trip, sensor data, audio, legacy photos, and audit rows. Export the restricted archive first."
+                } else {
+                    "This removes the trip record, audio, legacy photos, and all its stored data."
+                }
+            )
+            .setPositiveButton(if (reviewed) "Purge" else "Delete") { _, _ ->
                 deleteTrip()
             }
             .setNegativeButton("Cancel", null)
@@ -740,16 +1225,15 @@ class TripDetailActivity : AppCompatActivity() {
 
     private fun deleteTrip() {
         scope.launch {
-            withContext(Dispatchers.IO) {
-                val photos = database.tripDao().getPhotosForTrip(tripId)
-                for (photo in photos) {
-                    try {
-                        java.io.File(photo.filePath).delete()
-                    } catch (e: Exception) {
-                        Log.e("RoadLog", "Failed to delete photo ${photo.filePath}", e)
-                    }
-                }
-                database.tripDao().deleteTripCascade(tripId)
+            val report = withContext(Dispatchers.IO) {
+                database.tripDao().deleteTripWithMediaFiles(tripId)
+            }
+            if (!report.isComplete || report.missingFiles > 0) {
+                Toast.makeText(
+                    this@TripDetailActivity,
+                    "Trip deleted; media cleanup: ${report.deletedFiles} removed, ${report.missingFiles} missing, ${report.failures.size} failed",
+                    Toast.LENGTH_LONG
+                ).show()
             }
             finish()
         }

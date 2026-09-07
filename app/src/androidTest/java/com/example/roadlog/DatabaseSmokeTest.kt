@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.util.zip.ZipFile
 
 @RunWith(AndroidJUnit4::class)
 class DatabaseSmokeTest {
@@ -159,17 +160,25 @@ class DatabaseSmokeTest {
         db.tripDao().insertEvents(listOf(TripEvent(eventId = eventId, tripId = tripId, markerTimeMs = TestFixtures.BASE_TIME_MS)))
         db.tripDao().annotateEvent(
             eventId,
-            EventAnnotation("SIG", listOf("BUS"), 2, "QUEUED")
+            EventAnnotation(
+                primaryCauseCode = "SIGNAL",
+                confidenceCode = 2,
+                trafficState = "QUEUED"
+            )
         )
         db.tripDao().annotateEvent(
             eventId,
-            EventAnnotation("QUE", emptyList(), 3, "DENSE_MOVING")
+            EventAnnotation(
+                primaryCauseCode = "QUEUE",
+                confidenceCode = 3,
+                trafficState = "DENSE_MOVING"
+            )
         )
         val revisions = db.tripDao().getAnnotationsForEvent(eventId)
         assertEquals(2, revisions.size)
-        assertEquals("SIG", revisions[0].primaryCauseCode)
-        assertEquals("QUE", revisions[1].primaryCauseCode)
-        assertEquals("BUS", revisions[0].secondaryCause1)
+        assertEquals("SIGNAL", revisions[0].primaryCauseCode)
+        assertEquals("QUEUE", revisions[1].primaryCauseCode)
+        assertEquals("QUEUE", db.tripDao().getTripEvent(eventId)!!.primaryCauseCode)
     }
 
     @Test
@@ -281,7 +290,7 @@ class DatabaseSmokeTest {
             eventCount = 4,
             gpsPointCount = 100,
             accelPointCount = 200,
-            causeBreakdown = "{\"SIGNAL\":1,\"QUEUE\":1,\"BUS\":1,\"POTHOLE\":1}",
+            causeBreakdown = "{\"SIGNAL\":1,\"QUEUE\":1,\"BUS\":1,\"ROUGH\":1}",
             createdAt = TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS
         )
 
@@ -376,5 +385,176 @@ class DatabaseSmokeTest {
 
         assertEquals(0, db.tripDao().getGpsForTrip(id1, TestFixtures.BASE_TIME_MS, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS).size)
         assertEquals(5, db.tripDao().getGpsForTrip(id2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS / 2, TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS + TestFixtures.HOUR_MS / 2).size)
+    }
+
+    @Test
+    fun `deleteTripWithMediaFiles removes database rows and media files`() = runTest {
+        val trip = TestFixtures.tripA()
+        val tripId = db.tripDao().insertTrip(trip)
+        val photoFile = File(photoDir, "purge-photo.jpg").apply { writeBytes(TestFixtures.generateJpegBytes()) }
+        val audioFile = File(photoDir, "purge-audio.m4a").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        db.tripDao().insertPhoto(
+            TripPhoto(tripId = tripId, timestamp = trip.startTimeMs, filePath = photoFile.absolutePath)
+        )
+        db.tripDao().insertAudio(
+            TripAudio(
+                audioId = "audio-purge",
+                tripId = tripId,
+                startTimeMs = trip.startTimeMs,
+                filePath = audioFile.absolutePath
+            )
+        )
+
+        val report = db.tripDao().deleteTripWithMediaFiles(tripId)
+
+        assertEquals(2, report.attemptedFiles)
+        assertEquals(2, report.deletedFiles)
+        assertTrue(report.failures.isEmpty())
+        assertFalse(photoFile.exists())
+        assertFalse(audioFile.exists())
+        assertNull(db.tripDao().getTripById(tripId))
+    }
+
+    @Test
+    fun `deleteTripWithMediaFiles reports missing media`() = runTest {
+        val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
+        db.tripDao().insertPhoto(
+            TripPhoto(
+                tripId = tripId,
+                timestamp = TestFixtures.BASE_TIME_MS,
+                filePath = File(photoDir, "does-not-exist.jpg").absolutePath
+            )
+        )
+
+        val report = db.tripDao().deleteTripWithMediaFiles(tripId)
+
+        assertEquals(1, report.attemptedFiles)
+        assertEquals(1, report.missingFiles)
+        assertFalse(report.isComplete)
+        assertNull(db.tripDao().getTripById(tripId))
+    }
+
+    @Test
+    fun `archival audio failure metadata and audit evidence persist`() = runTest {
+        val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
+        val audio = TripAudio(
+            audioId = "audio-frame-failure",
+            tripId = tripId,
+            startTimeMs = TestFixtures.BASE_TIME_MS,
+            endTimeMs = TestFixtures.BASE_TIME_MS + 1000L,
+            filePath = File(photoDir, "missing-audio.m4a").absolutePath,
+            status = TripAudioStatus.FAILED,
+            interruptionReason = TripAudioFailureType.reason(
+                TripAudioFailureType.FRAME_PROCESSING,
+                "encoder rejected frame"
+            )
+        )
+        db.tripDao().insertAudio(audio)
+
+        val evidence = AudioEvidence.inventory(audio, filePresent = false, fileUsable = false)
+        db.tripDao().insertAuditRevisionIfAbsent(
+            AudioEvidence.auditRevision(evidence, revisionTimeMs = 1234L)
+        )
+
+        val loadedAudio = db.tripDao().getAudioById(audio.audioId)!!
+        val loadedAudit = db.tripDao().getAllAuditRevisionsForExport().single()
+        assertEquals(TripAudioStatus.FAILED, loadedAudio.status)
+        assertTrue(loadedAudio.interruptionReason!!.contains(TripAudioFailureType.FRAME_PROCESSING))
+        assertTrue(loadedAudio.interruptionReason!!.contains("encoder rejected frame"))
+        assertEquals("AUDIO_FAILURE", loadedAudit.revisionType)
+        assertTrue(loadedAudit.currentValue!!.contains("FRAME_PROCESSING_FAILURE"))
+        assertTrue(loadedAudit.currentValue!!.contains("final_audio_status"))
+
+        val qualitySummary = AudioEvidence.summarizeInventory(listOf(evidence))
+        db.tripDao().upsertTripQuality(
+            TripQuality(
+                tripId = tripId,
+                audioSegmentCount = qualitySummary.segmentCount,
+                warningsJson = org.json.JSONArray(qualitySummary.warningMessages).toString(),
+                completeness = "COMPLETE_WITH_WARNINGS"
+            )
+        )
+        val loadedQuality = db.tripDao().getAllTripQuality().single()
+        assertEquals(1, loadedQuality.audioSegmentCount)
+        assertTrue(loadedQuality.warningsJson.contains(TripAudioFailureType.FRAME_PROCESSING))
+    }
+
+    @Test
+    fun `research archive retains archival audio failure evidence`() = runTest {
+        val trip = TestFixtures.tripA()
+        val tripId = db.tripDao().insertTrip(trip)
+        val persistedTrip = db.tripDao().getTripById(tripId)!!
+        val audio = TripAudio(
+            audioId = "audio-export-failure",
+            tripId = tripId,
+            startTimeMs = trip.startTimeMs,
+            endTimeMs = trip.startTimeMs + 1000L,
+            filePath = File(photoDir, "not-created.m4a").absolutePath,
+            status = TripAudioStatus.FAILED,
+            interruptionReason = TripAudioFailureType.reason(
+                TripAudioFailureType.FRAME_PROCESSING,
+                "encoder rejected frame"
+            )
+        )
+        db.tripDao().insertAudio(audio)
+        db.tripDao().upsertTripQuality(TripQuality(tripId = tripId))
+
+        val archive = File(photoDir, "research-export.zip")
+        val result = ResearchExporter.writeArchive(
+            database = db,
+            trips = listOf(persistedTrip),
+            output = archive,
+            deviceId = "test-device",
+            mode = ResearchExportMode.RESTRICTED_RAW
+        )
+        ResearchExporter.validateArchive(archive, result)
+
+        ZipFile(archive).use { zip ->
+            val audioIndex = zip.getInputStream(zip.getEntry("audio/audio_index.csv"))
+                .bufferedReader()
+                .use { it.readText() }
+            val quality = zip.getInputStream(zip.getEntry("qa/trips.json"))
+                .bufferedReader()
+                .use { it.readText() }
+            val audit = zip.getInputStream(zip.getEntry("audit/revisions.csv"))
+                .bufferedReader()
+                .use { it.readText() }
+
+            assertTrue(audioIndex.contains("FRAME_PROCESSING_FAILURE"))
+            assertTrue(audioIndex.contains(TripAudioCompleteness.MISSING_EXPECTED_AUDIO_FILE))
+            assertTrue(audioIndex.contains("\"false\",\"false\""))
+            assertTrue(quality.contains("audioFailureCount"))
+            assertTrue(audit.contains("AUDIO_FAILURE"))
+            assertTrue(audit.contains("FRAME_PROCESSING_FAILURE"))
+        }
+    }
+
+    @Test
+    fun `recoverable trip has incomplete quality evidence and interruption warning`() = runTest {
+        val trip = TestFixtures.tripA().copy(status = TripStatus.RECORDING)
+        val tripId = db.tripDao().insertTrip(trip)
+        db.tripDao().markTripInterrupted(
+            tripId = tripId,
+            status = TripStatus.RECOVERABLE,
+            endTimeMs = trip.startTimeMs + 5_000L,
+            endNanoTime = 5_000L,
+            reason = "SERVICE_DESTROYED",
+            lastWriteTimeMs = trip.startTimeMs
+        )
+        val warning = "trip is recoverable/interrupted and must not be treated as a completed valid trip"
+        db.tripDao().upsertTripQuality(
+            TripQuality(
+                tripId = tripId,
+                warningsJson = org.json.JSONArray().put(warning).toString(),
+                completeness = "INCOMPLETE"
+            )
+        )
+
+        val recovered = db.tripDao().getTripById(tripId)!!
+        val quality = db.tripDao().getAllTripQuality().single()
+        assertEquals(TripStatus.RECOVERABLE, recovered.status)
+        assertEquals("SERVICE_DESTROYED", recovered.interruptionReason)
+        assertEquals("INCOMPLETE", quality.completeness)
+        assertTrue(quality.warningsJson.contains("completed valid trip"))
     }
 }

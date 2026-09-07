@@ -24,7 +24,8 @@ class TripAudioRecorder(
     private val directory: File,
     private val onSegmentStarted: (AudioSegmentInfo) -> Unit,
     private val onSegmentCompleted: (AudioSegmentInfo, Long, Long, String, String?, String?) -> Unit,
-    private val segmentDurationMs: Long = 5 * 60 * 1000L
+    private val segmentDurationMs: Long = 5 * 60 * 1000L,
+    private val onFailure: (String) -> Unit = {}
 ) : VoskSpeechRecognizer.AudioFrameListener {
     companion object {
         private const val SAMPLE_RATE_HZ = 16_000
@@ -54,7 +55,7 @@ class TripAudioRecorder(
         if (length <= 0) return
         synchronized(this) {
             if (!running) return
-            val segment = activeSegment ?: return
+            var segment = activeSegment ?: return
             val elapsedMs = (elapsedRealtimeNanos - segment.startElapsedRealtimeNanos) / 1_000_000L
             if (elapsedMs >= segmentDurationMs) {
                 finishSegment(
@@ -64,24 +65,121 @@ class TripAudioRecorder(
                     reason = null
                 )
                 openSegment(segment.startTimeMs + elapsedMs, elapsedRealtimeNanos)
+                segment = activeSegment ?: return
             }
-            queue(samples, length, elapsedRealtimeNanos)
-            drain(endOfStream = false)
+            try {
+                queue(samples, length, elapsedRealtimeNanos)
+                drain(endOfStream = false)
+            } catch (error: Exception) {
+                failActiveSegment(
+                    endTimeMs = segment.startTimeMs + elapsedMs,
+                    endElapsedRealtimeNanos = elapsedRealtimeNanos,
+                    error = error
+                )
+            }
         }
+    }
+
+    private fun failActiveSegment(
+        endTimeMs: Long,
+        endElapsedRealtimeNanos: Long,
+        error: Throwable
+    ) {
+        if (activeSegment == null) return
+        val reason = TripAudioFailureType.reason(
+            TripAudioFailureType.FRAME_PROCESSING,
+            error.message ?: "audio encoder rejected frame"
+        )
+        onFailure(reason)
+        finishSegment(
+            endTimeMs = endTimeMs,
+            endElapsedRealtimeNanos = endElapsedRealtimeNanos,
+            status = TripAudioStatus.FAILED,
+            reason = reason
+        )
+        running = false
+        activeSegment = null
+    }
+
+    private fun finishSegment(
+        endTimeMs: Long,
+        endElapsedRealtimeNanos: Long,
+        status: String,
+        reason: String?
+    ) {
+        val segment = activeSegment ?: return
+        val failureTypes = linkedSetOf<String>()
+        val failureReasons = mutableListOf<String>()
+        TripAudioFailureType.typesFromReason(reason).forEach(failureTypes::add)
+        reason?.takeIf { it.isNotBlank() }?.let(failureReasons::add)
+
+        fun addFailure(type: String, detail: String?) {
+            if (failureTypes.add(type)) {
+                failureReasons += TripAudioFailureType.reason(type, detail)
+            }
+        }
+
+        if (codec != null) {
+            try {
+                drain(endOfStream = true)
+            } catch (error: Exception) {
+                addFailure(
+                    TripAudioFailureType.SEGMENT_FINALIZATION,
+                    error.message ?: "audio encoder drain failed"
+                )
+            }
+        }
+        releaseEncoder()?.let { error ->
+            addFailure(TripAudioFailureType.SEGMENT_FINALIZATION, error)
+        }
+        val checksum = sha256(segment.file)
+        if (status == TripAudioStatus.COMPLETE && encodedSampleCount == 0) {
+            addFailure(
+                TripAudioFailureType.SEGMENT_FINALIZATION,
+                "audio segment contains no encoded samples"
+            )
+        }
+        if (status == TripAudioStatus.FAILED && failureTypes.isEmpty()) {
+            addFailure(TripAudioFailureType.UNKNOWN, "audio segment failed")
+        }
+        val effectiveStatus = when {
+            failureTypes.isEmpty() -> status
+            status == TripAudioStatus.INTERRUPTED &&
+                failureTypes.all { it == TripAudioFailureType.INTERRUPTION } ->
+                TripAudioStatus.INTERRUPTED
+            else -> TripAudioStatus.FAILED
+        }
+        val effectiveReason = failureReasons.joinToString("; ").takeIf { it.isNotBlank() }
+        onSegmentCompleted(
+            segment,
+            endTimeMs,
+            endElapsedRealtimeNanos,
+            effectiveStatus,
+            checksum,
+            effectiveReason
+        )
     }
 
     @Synchronized
     fun stop(endTimeMs: Long, endElapsedRealtimeNanos: Long, reason: String? = null) {
         if (!running) return
         val status = if (reason == null) TripAudioStatus.COMPLETE else TripAudioStatus.INTERRUPTED
-        finishSegment(endTimeMs, endElapsedRealtimeNanos, status, reason)
+        finishSegment(
+            endTimeMs,
+            endElapsedRealtimeNanos,
+            status,
+            reason?.let { TripAudioFailureType.reason(TripAudioFailureType.INTERRUPTION, it) }
+        )
         running = false
         activeSegment = null
     }
 
     @Synchronized
     fun fail(endTimeMs: Long, endElapsedRealtimeNanos: Long, reason: String) {
-        stop(endTimeMs, endElapsedRealtimeNanos, reason)
+        if (!running) return
+        finishSegment(endTimeMs, endElapsedRealtimeNanos, TripAudioStatus.FAILED, reason)
+        running = false
+        activeSegment = null
     }
 
     private fun openSegment(startTimeMs: Long, startElapsedRealtimeNanos: Long) {
@@ -104,7 +202,7 @@ class TripAudioRecorder(
             activeSegment = segment
             onSegmentStarted(segment)
         } catch (error: Exception) {
-            releaseEncoder()
+            val cleanupError = releaseEncoder()
             onSegmentStarted(segment)
             onSegmentCompleted(
                 segment,
@@ -112,19 +210,29 @@ class TripAudioRecorder(
                 startElapsedRealtimeNanos,
                 TripAudioStatus.FAILED,
                 null,
-                error.message ?: "AAC encoder initialization failed"
+                TripAudioFailureType.reason(
+                    TripAudioFailureType.ENCODER_INITIALIZATION,
+                    listOfNotNull(
+                        error.message ?: "AAC encoder initialization failed",
+                        cleanupError
+                    ).joinToString("; ")
+                )
             )
+            running = false
             activeSegment = null
         }
     }
 
     private fun queue(samples: ShortArray, length: Int, timestampNanos: Long) {
-        val encoder = codec ?: return
+        require(length <= samples.size) { "archival audio frame length exceeds buffer" }
+        val encoder = codec ?: error("audio encoder is unavailable")
         val inputIndex = encoder.dequeueInputBuffer(0)
-        if (inputIndex < 0) return
-        val input = encoder.getInputBuffer(inputIndex) ?: return
+        check(inputIndex >= 0) { "audio encoder did not accept archival frame" }
+        val input = encoder.getInputBuffer(inputIndex)
+            ?: error("audio encoder input buffer is unavailable")
         input.clear()
         val bytes = minOf(length, input.remaining() / 2)
+        check(bytes == length) { "archival audio frame exceeds encoder input buffer" }
         for (index in 0 until bytes) {
             val value = samples[index].toInt()
             input.put((value and 0xff).toByte())
@@ -136,7 +244,7 @@ class TripAudioRecorder(
     }
 
     private fun drain(endOfStream: Boolean) {
-        val encoder = codec ?: return
+        val encoder = codec ?: error("audio encoder is unavailable")
         val deadline = SystemClock.elapsedRealtime() + if (endOfStream) 2_000L else 0L
         if (endOfStream) {
             var eosQueued = false
@@ -155,13 +263,14 @@ class TripAudioRecorder(
                     drainOutput(encoder, endOfStream = false, timeoutUs = 0L)
                 }
             }
-            if (!eosQueued) return
+            check(eosQueued) { "audio encoder EOS could not be queued" }
         }
         val timeoutUs = if (endOfStream) 10_000L else 0L
         do {
             val reachedEnd = drainOutput(encoder, endOfStream, timeoutUs)
             if (reachedEnd || !endOfStream) return
         } while (SystemClock.elapsedRealtime() <= deadline)
+        if (endOfStream) error("audio encoder EOS was not drained")
     }
 
     private fun drainOutput(encoder: MediaCodec, endOfStream: Boolean, timeoutUs: Long): Boolean {
@@ -169,14 +278,19 @@ class TripAudioRecorder(
         var outputIndex = encoder.dequeueOutputBuffer(info, timeoutUs)
         while (true) {
             if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && muxerTrack < 0) {
-                muxerTrack = muxer?.addTrack(encoder.outputFormat) ?: -1
-                if (muxerTrack >= 0) muxer?.start()
+                val activeMuxer = muxer ?: error("audio muxer is unavailable")
+                muxerTrack = activeMuxer.addTrack(encoder.outputFormat)
+                check(muxerTrack >= 0) { "audio muxer track could not be created" }
+                activeMuxer.start()
             } else if (outputIndex >= 0) {
                 val output = encoder.getOutputBuffer(outputIndex)
-                if (output != null && info.size > 0 && muxerTrack >= 0) {
-                    output.position(info.offset)
+                if (info.size > 0) {
+                    check(output != null) { "audio encoder output buffer is unavailable" }
+                    check(muxerTrack >= 0) { "audio muxer track is unavailable" }
+                    val activeMuxer = muxer ?: error("audio muxer is unavailable")
+                    output!!.position(info.offset)
                     output.limit(info.offset + info.size)
-                    muxer?.writeSampleData(muxerTrack, output, info)
+                    activeMuxer.writeSampleData(muxerTrack, output, info)
                     if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                         encodedSampleCount++
                     }
@@ -194,41 +308,26 @@ class TripAudioRecorder(
         }
     }
 
-    private fun finishSegment(
-        endTimeMs: Long,
-        endElapsedRealtimeNanos: Long,
-        status: String,
-        reason: String?
-    ) {
-        val segment = activeSegment ?: return
-        if (codec != null) {
-            drain(endOfStream = true)
-        }
-        releaseEncoder()
-        val checksum = sha256(segment.file)
-        val effectiveStatus = if (status == TripAudioStatus.COMPLETE && encodedSampleCount == 0) {
-            TripAudioStatus.FAILED
-        } else {
-            status
-        }
-        onSegmentCompleted(
-            segment,
-            endTimeMs,
-            endElapsedRealtimeNanos,
-            effectiveStatus,
-            checksum,
-            reason ?: if (effectiveStatus == TripAudioStatus.FAILED) "audio segment contains no encoded samples" else null
-        )
-    }
-
-    private fun releaseEncoder() {
-        try { codec?.stop() } catch (_: Exception) {}
-        try { codec?.release() } catch (_: Exception) {}
+    private fun releaseEncoder(): String? {
+        val errors = mutableListOf<String>()
+        val activeCodec = codec
         codec = null
-        try { muxer?.stop() } catch (_: Exception) {}
-        try { muxer?.release() } catch (_: Exception) {}
+        try { activeCodec?.stop() } catch (error: Exception) {
+            errors += "codec stop: ${error.message ?: "failed"}"
+        }
+        try { activeCodec?.release() } catch (error: Exception) {
+            errors += "codec release: ${error.message ?: "failed"}"
+        }
+        val activeMuxer = muxer
         muxer = null
         muxerTrack = -1
+        try { activeMuxer?.stop() } catch (error: Exception) {
+            errors += "muxer stop: ${error.message ?: "failed"}"
+        }
+        try { activeMuxer?.release() } catch (error: Exception) {
+            errors += "muxer release: ${error.message ?: "failed"}"
+        }
+        return errors.joinToString("; ").takeIf { it.isNotBlank() }
     }
 
     private fun sha256(file: File): String? {
