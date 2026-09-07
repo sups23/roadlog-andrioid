@@ -1,0 +1,1695 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "4481313ec4f6b994c20e078f0a37db0c",
+    "entities": [
+      {
+        "tableName": "trip_data",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `latitude` REAL, `longitude` REAL, `speedKmh` REAL, `accelX` REAL, `accelY` REAL, `accelZ` REAL, `gyroX` REAL, `gyroY` REAL, `gyroZ` REAL, `rotX` REAL, `rotY` REAL, `rotZ` REAL, `rotW` REAL, `eventCause` TEXT, `rawTimestamp` INTEGER, `sourceTimestampNanos` INTEGER, `callbackTimeMs` INTEGER, `sourceElapsedRealtimeNanos` INTEGER, `sourceEpochTimeMs` INTEGER, `provider` TEXT, `horizontalAccuracyMeters` REAL, `speedValid` INTEGER, `speedAccuracyMps` REAL, `bearingDegrees` REAL, `bearingAccuracyDegrees` REAL, `altitudeMeters` REAL, `sensorType` INTEGER, `sensorAccuracy` INTEGER, `sourceType` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedKmh",
+            "columnName": "speedKmh",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelX",
+            "columnName": "accelX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelY",
+            "columnName": "accelY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelZ",
+            "columnName": "accelZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroX",
+            "columnName": "gyroX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroY",
+            "columnName": "gyroY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroZ",
+            "columnName": "gyroZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotX",
+            "columnName": "rotX",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotY",
+            "columnName": "rotY",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotZ",
+            "columnName": "rotZ",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotW",
+            "columnName": "rotW",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "eventCause",
+            "columnName": "eventCause",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rawTimestamp",
+            "columnName": "rawTimestamp",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceTimestampNanos",
+            "columnName": "sourceTimestampNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "callbackTimeMs",
+            "columnName": "callbackTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceElapsedRealtimeNanos",
+            "columnName": "sourceElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceEpochTimeMs",
+            "columnName": "sourceEpochTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "horizontalAccuracyMeters",
+            "columnName": "horizontalAccuracyMeters",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedValid",
+            "columnName": "speedValid",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedAccuracyMps",
+            "columnName": "speedAccuracyMps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bearingDegrees",
+            "columnName": "bearingDegrees",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bearingAccuracyDegrees",
+            "columnName": "bearingAccuracyDegrees",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "altitudeMeters",
+            "columnName": "altitudeMeters",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sensorAccuracy",
+            "columnName": "sensorAccuracy",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceType",
+            "columnName": "sourceType",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_data_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_data_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_trip_data_tripId_timestamp",
+            "unique": false,
+            "columnNames": [
+              "tripId",
+              "timestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_data_tripId_timestamp` ON `${TABLE_NAME}` (`tripId`, `timestamp`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "trips",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `startTimeMs` INTEGER NOT NULL, `endTimeMs` INTEGER NOT NULL, `startNanoTime` INTEGER NOT NULL, `endNanoTime` INTEGER NOT NULL, `distanceMeters` REAL NOT NULL, `eventCount` INTEGER NOT NULL, `gpsPointCount` INTEGER NOT NULL, `accelPointCount` INTEGER NOT NULL, `causeBreakdown` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `status` INTEGER NOT NULL, `tripUuid` TEXT NOT NULL DEFAULT '', `sessionId` TEXT NOT NULL DEFAULT 'STUDY_SESSION', `corridorId` TEXT NOT NULL DEFAULT 'STUDY_CORRIDOR', `direction` TEXT, `observationPeriod` TEXT, `deviceId` TEXT, `validityStatus` TEXT, `notes` TEXT, `lastWriteTimeMs` INTEGER NOT NULL DEFAULT 0, `writeFailureCount` INTEGER NOT NULL DEFAULT 0, `droppedSampleCount` INTEGER NOT NULL DEFAULT 0, `interruptionReason` TEXT, `codebookVersion` TEXT, `appVersion` TEXT, `schemaVersion` INTEGER, `studyDateLocal` TEXT, `timeZoneId` TEXT, `qaStatus` TEXT NOT NULL DEFAULT 'UNREVIEWED', `qaNotes` TEXT, `routeDiversion` INTEGER NOT NULL DEFAULT 0, `recordingInterruption` INTEGER NOT NULL DEFAULT 0, `gpsInterruption` INTEGER NOT NULL DEFAULT 0, `sensorInterruption` INTEGER NOT NULL DEFAULT 0, `partialTraversal` INTEGER NOT NULL DEFAULT 0, `coverageEndTimeMs` INTEGER, `coverageEndLatitude` REAL, `coverageEndLongitude` REAL, `continuationOfTripUuid` TEXT, `sensorProfileVersion` TEXT, `exportFormatVersion` TEXT, `protocolVersion` TEXT, `causeConfigJson` TEXT, `exclusionCode` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startTimeMs",
+            "columnName": "startTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTimeMs",
+            "columnName": "endTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startNanoTime",
+            "columnName": "startNanoTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endNanoTime",
+            "columnName": "endNanoTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "distanceMeters",
+            "columnName": "distanceMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventCount",
+            "columnName": "eventCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsPointCount",
+            "columnName": "gpsPointCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accelPointCount",
+            "columnName": "accelPointCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "causeBreakdown",
+            "columnName": "causeBreakdown",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripUuid",
+            "columnName": "tripUuid",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'STUDY_SESSION'"
+          },
+          {
+            "fieldPath": "corridorId",
+            "columnName": "corridorId",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'STUDY_CORRIDOR'"
+          },
+          {
+            "fieldPath": "direction",
+            "columnName": "direction",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "observationPeriod",
+            "columnName": "observationPeriod",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "validityStatus",
+            "columnName": "validityStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastWriteTimeMs",
+            "columnName": "lastWriteTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "writeFailureCount",
+            "columnName": "writeFailureCount",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "droppedSampleCount",
+            "columnName": "droppedSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "interruptionReason",
+            "columnName": "interruptionReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "codebookVersion",
+            "columnName": "codebookVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "appVersion",
+            "columnName": "appVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schemaVersion",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "studyDateLocal",
+            "columnName": "studyDateLocal",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "timeZoneId",
+            "columnName": "timeZoneId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "qaStatus",
+            "columnName": "qaStatus",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'UNREVIEWED'"
+          },
+          {
+            "fieldPath": "qaNotes",
+            "columnName": "qaNotes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "routeDiversion",
+            "columnName": "routeDiversion",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "recordingInterruption",
+            "columnName": "recordingInterruption",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "gpsInterruption",
+            "columnName": "gpsInterruption",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "sensorInterruption",
+            "columnName": "sensorInterruption",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "partialTraversal",
+            "columnName": "partialTraversal",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "coverageEndTimeMs",
+            "columnName": "coverageEndTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "coverageEndLatitude",
+            "columnName": "coverageEndLatitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "coverageEndLongitude",
+            "columnName": "coverageEndLongitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "continuationOfTripUuid",
+            "columnName": "continuationOfTripUuid",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sensorProfileVersion",
+            "columnName": "sensorProfileVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "exportFormatVersion",
+            "columnName": "exportFormatVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "protocolVersion",
+            "columnName": "protocolVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "causeConfigJson",
+            "columnName": "causeConfigJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "exclusionCode",
+            "columnName": "exclusionCode",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trips_tripUuid",
+            "unique": true,
+            "columnNames": [
+              "tripUuid"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_trips_tripUuid` ON `${TABLE_NAME}` (`tripUuid`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "trip_photos",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` INTEGER NOT NULL, `timestamp` INTEGER NOT NULL, `latitude` REAL, `longitude` REAL, `filePath` TEXT NOT NULL, `captureId` TEXT NOT NULL DEFAULT '', `eventId` TEXT, `requestTimeMs` INTEGER, `captureTimeMs` INTEGER, `requestElapsedRealtimeNanos` INTEGER, `captureElapsedRealtimeNanos` INTEGER, `locationAccuracyMeters` REAL, `locationProvider` TEXT, `locationFixTimeMs` INTEGER, `mimeType` TEXT, `fileSizeBytes` INTEGER, `sha256` TEXT, `width` INTEGER, `height` INTEGER, `usabilityStatus` TEXT, `privacyStatus` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "filePath",
+            "columnName": "filePath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "captureId",
+            "columnName": "captureId",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "requestTimeMs",
+            "columnName": "requestTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "captureTimeMs",
+            "columnName": "captureTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "requestElapsedRealtimeNanos",
+            "columnName": "requestElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "captureElapsedRealtimeNanos",
+            "columnName": "captureElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationAccuracyMeters",
+            "columnName": "locationAccuracyMeters",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationProvider",
+            "columnName": "locationProvider",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationFixTimeMs",
+            "columnName": "locationFixTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mimeType",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileSizeBytes",
+            "columnName": "fileSizeBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "usabilityStatus",
+            "columnName": "usabilityStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "privacyStatus",
+            "columnName": "privacyStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_photos_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_photos_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_trip_photos_captureId",
+            "unique": true,
+            "columnNames": [
+              "captureId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_trip_photos_captureId` ON `${TABLE_NAME}` (`captureId`)"
+          },
+          {
+            "name": "index_trip_photos_eventId",
+            "unique": false,
+            "columnNames": [
+              "eventId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_photos_eventId` ON `${TABLE_NAME}` (`eventId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "trip_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `tripId` INTEGER NOT NULL, `markerTimeMs` INTEGER NOT NULL, `markerElapsedRealtimeNanos` INTEGER, `experiencedLatitude` REAL, `experiencedLongitude` REAL, `sourceLatitude` REAL, `sourceLongitude` REAL, `sourceLocationVisible` INTEGER, `locationAccuracyMeters` REAL, `locationProvider` TEXT, `locationFixTimeMs` INTEGER, `locationFixElapsedRealtimeNanos` INTEGER, `locationFixAgeMs` INTEGER, `speedValid` INTEGER, `speedKmh` REAL, `provisionalCauseCode` TEXT, `primaryCauseCode` TEXT, `confidenceCode` INTEGER, `trafficState` TEXT, `status` TEXT NOT NULL, `provenance` TEXT NOT NULL, `transcript` TEXT, `recognitionConfidence` REAL, `codebookVersion` TEXT, `notes` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`eventId`), FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "markerTimeMs",
+            "columnName": "markerTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "markerElapsedRealtimeNanos",
+            "columnName": "markerElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "experiencedLatitude",
+            "columnName": "experiencedLatitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "experiencedLongitude",
+            "columnName": "experiencedLongitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceLatitude",
+            "columnName": "sourceLatitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceLongitude",
+            "columnName": "sourceLongitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceLocationVisible",
+            "columnName": "sourceLocationVisible",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationAccuracyMeters",
+            "columnName": "locationAccuracyMeters",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationProvider",
+            "columnName": "locationProvider",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationFixTimeMs",
+            "columnName": "locationFixTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationFixElapsedRealtimeNanos",
+            "columnName": "locationFixElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "locationFixAgeMs",
+            "columnName": "locationFixAgeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedValid",
+            "columnName": "speedValid",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedKmh",
+            "columnName": "speedKmh",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "provisionalCauseCode",
+            "columnName": "provisionalCauseCode",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "primaryCauseCode",
+            "columnName": "primaryCauseCode",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "confidenceCode",
+            "columnName": "confidenceCode",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "trafficState",
+            "columnName": "trafficState",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "provenance",
+            "columnName": "provenance",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transcript",
+            "columnName": "transcript",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "recognitionConfidence",
+            "columnName": "recognitionConfidence",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "codebookVersion",
+            "columnName": "codebookVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_events_tripId_markerTimeMs",
+            "unique": false,
+            "columnNames": [
+              "tripId",
+              "markerTimeMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_events_tripId_markerTimeMs` ON `${TABLE_NAME}` (`tripId`, `markerTimeMs`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sensor_metadata",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`metadataId` TEXT NOT NULL, `tripId` INTEGER NOT NULL, `sensorType` INTEGER NOT NULL, `sensorName` TEXT, `vendor` TEXT, `version` TEXT, `resolution` REAL, `maximumRange` REAL, `selectedProfile` TEXT, `registrationResult` TEXT, `sensorProfileVersion` TEXT, `requestedPeriodUs` INTEGER, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`metadataId`), FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "metadataId",
+            "columnName": "metadataId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorType",
+            "columnName": "sensorType",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sensorName",
+            "columnName": "sensorName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "vendor",
+            "columnName": "vendor",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "version",
+            "columnName": "version",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "resolution",
+            "columnName": "resolution",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "maximumRange",
+            "columnName": "maximumRange",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "selectedProfile",
+            "columnName": "selectedProfile",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "registrationResult",
+            "columnName": "registrationResult",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sensorProfileVersion",
+            "columnName": "sensorProfileVersion",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "requestedPeriodUs",
+            "columnName": "requestedPeriodUs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "metadataId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sensor_metadata_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_metadata_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "trip_quality",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`tripId` INTEGER NOT NULL, `gpsSampleCount` INTEGER NOT NULL, `gpsAvailabilityPercent` REAL, `medianGpsAccuracyMeters` REAL, `accelSampleCount` INTEGER NOT NULL, `accelEffectiveHz` REAL, `gyroSampleCount` INTEGER NOT NULL, `gyroEffectiveHz` REAL, `rotationSampleCount` INTEGER NOT NULL, `rotationEffectiveHz` REAL, `medianIntervalMs` INTEGER, `p05IntervalMs` INTEGER, `p95IntervalMs` INTEGER, `longestGapMs` INTEGER, `accelMedianIntervalMs` INTEGER, `accelLongestGapMs` INTEGER, `gyroMedianIntervalMs` INTEGER, `gyroLongestGapMs` INTEGER, `rotationMedianIntervalMs` INTEGER, `rotationLongestGapMs` INTEGER, `gpsLongestGapMs` INTEGER, `timeToFirstGpsFixMs` INTEGER, `manualEventMarkerCount` INTEGER NOT NULL, `photoCount` INTEGER NOT NULL, `audioSegmentCount` INTEGER NOT NULL, `gpsProviderJson` TEXT NOT NULL, `gpsBelowFivePercent` REAL, `gpsBelowTenPercent` REAL, `gpsAbovePoorQualityPercent` REAL, `invalidSpeedCount` INTEGER NOT NULL, `unavailableSpeedCount` INTEGER NOT NULL, `duplicateTimestampCount` INTEGER NOT NULL, `nonMonotonicTimestampCount` INTEGER NOT NULL, `interruptionCount` INTEGER NOT NULL, `storageFailureCount` INTEGER NOT NULL, `droppedSampleCount` INTEGER NOT NULL, `warningsJson` TEXT NOT NULL, `completeness` TEXT NOT NULL, `generatedAt` INTEGER NOT NULL, PRIMARY KEY(`tripId`), FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsSampleCount",
+            "columnName": "gpsSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsAvailabilityPercent",
+            "columnName": "gpsAvailabilityPercent",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "medianGpsAccuracyMeters",
+            "columnName": "medianGpsAccuracyMeters",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelSampleCount",
+            "columnName": "accelSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accelEffectiveHz",
+            "columnName": "accelEffectiveHz",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroSampleCount",
+            "columnName": "gyroSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gyroEffectiveHz",
+            "columnName": "gyroEffectiveHz",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotationSampleCount",
+            "columnName": "rotationSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rotationEffectiveHz",
+            "columnName": "rotationEffectiveHz",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "medianIntervalMs",
+            "columnName": "medianIntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "p05IntervalMs",
+            "columnName": "p05IntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "p95IntervalMs",
+            "columnName": "p95IntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longestGapMs",
+            "columnName": "longestGapMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelMedianIntervalMs",
+            "columnName": "accelMedianIntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "accelLongestGapMs",
+            "columnName": "accelLongestGapMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroMedianIntervalMs",
+            "columnName": "gyroMedianIntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gyroLongestGapMs",
+            "columnName": "gyroLongestGapMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotationMedianIntervalMs",
+            "columnName": "rotationMedianIntervalMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rotationLongestGapMs",
+            "columnName": "rotationLongestGapMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gpsLongestGapMs",
+            "columnName": "gpsLongestGapMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "timeToFirstGpsFixMs",
+            "columnName": "timeToFirstGpsFixMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "voiceEventCount",
+            "columnName": "manualEventMarkerCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "photoCount",
+            "columnName": "photoCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioSegmentCount",
+            "columnName": "audioSegmentCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsProviderJson",
+            "columnName": "gpsProviderJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsBelowFivePercent",
+            "columnName": "gpsBelowFivePercent",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gpsBelowTenPercent",
+            "columnName": "gpsBelowTenPercent",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "gpsAbovePoorQualityPercent",
+            "columnName": "gpsAbovePoorQualityPercent",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "invalidSpeedCount",
+            "columnName": "invalidSpeedCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unavailableSpeedCount",
+            "columnName": "unavailableSpeedCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "duplicateTimestampCount",
+            "columnName": "duplicateTimestampCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nonMonotonicTimestampCount",
+            "columnName": "nonMonotonicTimestampCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "interruptionCount",
+            "columnName": "interruptionCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageFailureCount",
+            "columnName": "storageFailureCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "droppedSampleCount",
+            "columnName": "droppedSampleCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "warningsJson",
+            "columnName": "warningsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completeness",
+            "columnName": "completeness",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generatedAt",
+            "columnName": "generatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "tripId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "trip_audio",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`audioId` TEXT NOT NULL, `tripId` INTEGER NOT NULL, `eventId` TEXT, `startTimeMs` INTEGER NOT NULL, `endTimeMs` INTEGER, `startElapsedRealtimeNanos` INTEGER, `endElapsedRealtimeNanos` INTEGER, `segmentSequence` INTEGER NOT NULL, `filePath` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `codec` TEXT, `sampleRateHz` INTEGER, `channelCount` INTEGER, `fileSizeBytes` INTEGER, `sha256` TEXT, `interruptionReason` TEXT, `transcript` TEXT, `recognitionConfidence` REAL, `status` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`audioId`), FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`eventId`) REFERENCES `trip_events`(`eventId`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "audioId",
+            "columnName": "audioId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "startTimeMs",
+            "columnName": "startTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endTimeMs",
+            "columnName": "endTimeMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "startElapsedRealtimeNanos",
+            "columnName": "startElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "endElapsedRealtimeNanos",
+            "columnName": "endElapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "segmentSequence",
+            "columnName": "segmentSequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "filePath",
+            "columnName": "filePath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mimeType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "codec",
+            "columnName": "codec",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sampleRateHz",
+            "columnName": "sampleRateHz",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "channelCount",
+            "columnName": "channelCount",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fileSizeBytes",
+            "columnName": "fileSizeBytes",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "interruptionReason",
+            "columnName": "interruptionReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "transcript",
+            "columnName": "transcript",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "recognitionConfidence",
+            "columnName": "recognitionConfidence",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "audioId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trip_audio_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_audio_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_trip_audio_eventId",
+            "unique": false,
+            "columnNames": [
+              "eventId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trip_audio_eventId` ON `${TABLE_NAME}` (`eventId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "trip_events",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "eventId"
+            ],
+            "referencedColumns": [
+              "eventId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "audit_revisions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`revisionId` TEXT NOT NULL, `tripId` INTEGER, `eventId` TEXT, `fieldName` TEXT NOT NULL, `originalValue` TEXT, `currentValue` TEXT, `editor` TEXT, `revisionTimeMs` INTEGER NOT NULL, `reason` TEXT, `revisionType` TEXT NOT NULL, PRIMARY KEY(`revisionId`), FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`eventId`) REFERENCES `trip_events`(`eventId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "revisionId",
+            "columnName": "revisionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "fieldName",
+            "columnName": "fieldName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originalValue",
+            "columnName": "originalValue",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "currentValue",
+            "columnName": "currentValue",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "editor",
+            "columnName": "editor",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "revisionTimeMs",
+            "columnName": "revisionTimeMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "revisionType",
+            "columnName": "revisionType",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "revisionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_audit_revisions_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_audit_revisions_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_audit_revisions_eventId",
+            "unique": false,
+            "columnNames": [
+              "eventId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_audit_revisions_eventId` ON `${TABLE_NAME}` (`eventId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "trip_events",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "eventId"
+            ],
+            "referencedColumns": [
+              "eventId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "event_annotations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`annotationId` TEXT NOT NULL, `eventId` TEXT NOT NULL, `annotationVersion` INTEGER NOT NULL, `annotationTimestampMs` INTEGER NOT NULL, `reviewerId` TEXT, `primaryCauseCode` TEXT NOT NULL, `trafficState` TEXT, `confidenceCode` INTEGER, `notes` TEXT, `codebookVersion` TEXT NOT NULL, `supersedesAnnotationId` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`annotationId`), FOREIGN KEY(`eventId`) REFERENCES `trip_events`(`eventId`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "annotationId",
+            "columnName": "annotationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "annotationVersion",
+            "columnName": "annotationVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "annotationTimestampMs",
+            "columnName": "annotationTimestampMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reviewerId",
+            "columnName": "reviewerId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "primaryCauseCode",
+            "columnName": "primaryCauseCode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trafficState",
+            "columnName": "trafficState",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "confidenceCode",
+            "columnName": "confidenceCode",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "codebookVersion",
+            "columnName": "codebookVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "supersedesAnnotationId",
+            "columnName": "supersedesAnnotationId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "annotationId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_event_annotations_eventId_annotationVersion",
+            "unique": true,
+            "columnNames": [
+              "eventId",
+              "annotationVersion"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_event_annotations_eventId_annotationVersion` ON `${TABLE_NAME}` (`eventId`, `annotationVersion`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trip_events",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "eventId"
+            ],
+            "referencedColumns": [
+              "eventId"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4481313ec4f6b994c20e078f0a37db0c')"
+    ]
+  }
+}

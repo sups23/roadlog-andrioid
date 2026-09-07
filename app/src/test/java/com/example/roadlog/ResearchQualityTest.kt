@@ -35,11 +35,10 @@ class ResearchQualityTest {
     }
 
     @Test
-    fun `event annotation enforces primary secondary and confidence rules`() {
+    fun `event annotation enforces canonical primary and confidence rules`() {
         val errors = EventAnnotationValidator.validate(
             EventAnnotation(
                 primaryCauseCode = "SIG",
-                secondaryCauseCodes = listOf("QUE", "SIG", "BUS"),
                 confidenceCode = 4,
                 trafficState = "UNKNOWN"
             )
@@ -122,18 +121,20 @@ class ResearchQualityTest {
     }
 
     @Test
-    fun `unclassified cause cannot coexist with confident secondary cause`() {
+    fun `unknown cause is a valid explicit review value`() {
         val errors = EventAnnotationValidator.validate(
-            EventAnnotation(ResearchCodebook.UNCLASSIFIED_CODE, listOf("SIG"), 3, "QUEUED")
+            EventAnnotation(
+                primaryCauseCode = ResearchCodebook.UNKNOWN_CODE,
+                confidenceCode = 3,
+                trafficState = "QUEUED"
+            )
         )
-        assertFalse(errors.isEmpty())
+        assertTrue(errors.isEmpty())
     }
 
     @Test
-    fun `event provenance distinguishes voice from manual markers`() {
+    fun `event provenance includes the active voice input method`() {
         assertTrue(EventProvenance.VOICE_RECOGNIZED in EventProvenance.values)
-        assertTrue(EventProvenance.MANUAL_MARKER in EventProvenance.values)
-        assertFalse(EventProvenance.VOICE_RECOGNIZED == EventProvenance.MANUAL_MARKER)
     }
 
     @Test

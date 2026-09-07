@@ -1,5 +1,5 @@
 {
-  "version": "2",
+  "version": "3",
   "confidenceThreshold": 0.6,
   "fuzzyThreshold": 0.85,
   "minWordLength": 3,
@@ -8,7 +8,7 @@
   ],
   "causes": [
     {
-      "code": "SIG",
+      "code": "SIGNAL",
       "displayName": "SIGNAL",
       "shortForm": "SIGNAL",
       "phrases": [
@@ -26,7 +26,7 @@
       ]
     },
     {
-      "code": "QUE",
+      "code": "QUEUE",
       "displayName": "QUEUE",
       "shortForm": "QUEUE",
       "phrases": [
@@ -62,7 +62,7 @@
     },
     {
       "code": "PED",
-      "displayName": "PEDESTRIAN",
+      "displayName": "PED",
       "shortForm": "PED",
       "phrases": [
         "pedestrian",
@@ -77,8 +77,8 @@
       ]
     },
     {
-      "code": "RDS",
-      "displayName": "ROUGHNESS",
+      "code": "ROUGH",
+      "displayName": "ROUGH",
       "shortForm": "ROUGH",
       "phrases": [
         "roughness",
@@ -110,9 +110,9 @@
       ]
     },
     {
-      "code": "INC",
+      "code": "CONSTRUCTION",
       "displayName": "CONSTRUCTION",
-      "shortForm": "CONSTR",
+      "shortForm": "CONSTRUCTION",
       "phrases": [
         "construction",
         "road work"
@@ -125,9 +125,9 @@
       ]
     },
     {
-      "code": "PRK",
+      "code": "FRICTION",
       "displayName": "FRICTION",
-      "shortForm": "FRICT",
+      "shortForm": "FRICTION",
       "phrases": [
         "friction",
         "parked car",
@@ -144,9 +144,9 @@
       ]
     },
     {
-      "code": "TRN",
+      "code": "TURNING",
       "displayName": "TURNING",
-      "shortForm": "TURN",
+      "shortForm": "TURNING",
       "phrases": [
         "turning",
         "turning vehicle",
@@ -163,7 +163,7 @@
       ]
     },
     {
-      "code": "ENC",
+      "code": "MARKET",
       "displayName": "MARKET",
       "shortForm": "MARKET",
       "phrases": [
@@ -183,10 +183,11 @@
       ]
     },
     {
-      "code": "UNK",
-      "displayName": "UNCLASSIFIED",
-      "shortForm": "UNCLASSIFIED",
+      "code": "UNKNOWN",
+      "displayName": "UNKNOWN",
+      "shortForm": "UNKNOWN",
       "phrases": [
+        "unknown",
         "unclassified"
       ],
       "variants": [],

@@ -11,13 +11,13 @@ object CauseConfigLoader {
     private const val CONFIG_FILE = "cause_config.json"
 
     fun load(context: Context): CauseConfig {
-        val json = context.assets.open(CONFIG_FILE)
+        val rawJson = context.assets.open(CONFIG_FILE)
             .bufferedReader()
             .use { it.readText() }
-        return parse(JSONObject(json))
+        return parse(JSONObject(rawJson), rawJson)
     }
 
-    private fun parse(root: JSONObject): CauseConfig {
+    private fun parse(root: JSONObject, rawJson: String = ""): CauseConfig {
         val causesArray = root.getJSONArray("causes")
         val causes = (0 until causesArray.length()).map { i ->
             parseCause(causesArray.getJSONObject(i))
@@ -33,7 +33,8 @@ object CauseConfigLoader {
                 }
             ),
             causes = causes,
-            version = root.optString("version", ResearchCodebook.VERSION)
+            version = root.optString("version", ResearchCodebook.VERSION),
+            rawJson = rawJson
         )
     }
 

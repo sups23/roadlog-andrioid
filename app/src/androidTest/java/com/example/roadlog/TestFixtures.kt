@@ -14,7 +14,7 @@ object TestFixtures {
         eventCount = 3,
         gpsPointCount = 100,
         accelPointCount = 200,
-        causeBreakdown = JSONObject().put("SIG", 1).toString(),
+        causeBreakdown = JSONObject().put("SIGNAL", 1).toString(),
         createdAt = BASE_TIME_MS
     )
 
@@ -48,7 +48,7 @@ object TestFixtures {
 
     fun eventRowsForTrip(tripId: Long, startMs: Long, endMs: Long): List<TripData> {
         val stepMs = (endMs - startMs) / 4
-        return listOf("SIG", "QUE", "BUS", "RDS").mapIndexed { index, cause ->
+        return listOf("SIGNAL", "QUEUE", "BUS", "ROUGH").mapIndexed { index, cause ->
             TripData(
                 tripId = tripId,
                 timestamp = startMs + (index + 1) * stepMs,

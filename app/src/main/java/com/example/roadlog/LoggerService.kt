@@ -1165,7 +1165,7 @@ class LoggerService : Service() {
         val warnings = JSONArray().apply {
             if (qualityTripStatus != null && qualityTripStatus != TripStatus.COMPLETED) {
                 put("trip is recoverable/interrupted and must not be treated as a completed valid trip")
-                trip.interruptionReason?.let { put("trip interruption reason: $it") }
+                trip?.interruptionReason?.let { put("trip interruption reason: $it") }
             }
             if (writeFailureCount > 0) put("$writeFailureCount storage write failure(s)")
             if (droppedSampleCount > 0) put("$droppedSampleCount samples dropped after buffer limit")

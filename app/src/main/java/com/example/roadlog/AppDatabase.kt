@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -103,7 +104,11 @@ data class Trip(
     val coverageEndLatitude: Double? = null,
     val coverageEndLongitude: Double? = null,
     val continuationOfTripUuid: String? = null,
-    val sensorProfileVersion: String? = null
+    val sensorProfileVersion: String? = null,
+    val exportFormatVersion: String? = null,
+    val protocolVersion: String? = null,
+    val causeConfigJson: String? = null,
+    val exclusionCode: String? = null
 )
 
 @Entity(
@@ -168,35 +173,16 @@ data class TripEvent(
     val locationFixAgeMs: Long? = null,
     val speedValid: Boolean? = null,
     val speedKmh: Float? = null,
+    val provisionalCauseCode: String? = null,
     val primaryCauseCode: String? = null,
     val confidenceCode: Int? = null,
     val trafficState: String? = null,
     val status: String = EventStatus.PENDING,
-    val provenance: String = EventProvenance.MANUAL_MARKER,
+    val provenance: String = EventProvenance.VOICE_RECOGNIZED,
     val transcript: String? = null,
     val recognitionConfidence: Float? = null,
     val codebookVersion: String? = null,
     val notes: String? = null,
-    val createdAt: Long = System.currentTimeMillis()
-)
-
-@Entity(
-    tableName = "event_secondary_causes",
-    primaryKeys = ["eventId", "causeCode"],
-    foreignKeys = [
-        ForeignKey(
-            entity = TripEvent::class,
-            parentColumns = ["eventId"],
-            childColumns = ["eventId"],
-            onDelete = ForeignKey.CASCADE
-        )
-    ],
-    indices = [Index(value = ["eventId"])]
-)
-data class EventSecondaryCause(
-    val eventId: String,
-    val causeCode: String,
-    val codebookVersion: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -262,7 +248,8 @@ data class TripQuality(
     val rotationLongestGapMs: Long? = null,
     val gpsLongestGapMs: Long? = null,
     val timeToFirstGpsFixMs: Long? = null,
-    val manualEventMarkerCount: Int = 0,
+    // Keep the v7 column name so an already-created v7 database remains readable.
+    @ColumnInfo(name = "manualEventMarkerCount") val voiceEventCount: Int = 0,
     val photoCount: Int = 0,
     val audioSegmentCount: Int = 0,
     val gpsProviderJson: String = "{}",
@@ -372,8 +359,6 @@ data class EventAnnotationRevision(
     val annotationTimestampMs: Long,
     val reviewerId: String? = null,
     val primaryCauseCode: String,
-    val secondaryCause1: String? = null,
-    val secondaryCause2: String? = null,
     val trafficState: String? = null,
     val confidenceCode: Int? = null,
     val notes: String? = null,
@@ -426,6 +411,9 @@ interface TripDao {
     @Query("SELECT * FROM trip_data WHERE tripId = :tripId AND timestamp BETWEEN :fromMs AND :toMs AND latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY timestamp")
     suspend fun getGpsForTrip(tripId: Long, fromMs: Long, toMs: Long): List<TripData>
 
+    @Query("SELECT * FROM trip_data WHERE tripId = :tripId AND latitude IS NOT NULL AND longitude IS NOT NULL ORDER BY timestamp, id")
+    suspend fun getGpsForMap(tripId: Long): List<TripData>
+
     @Query("SELECT * FROM trip_data WHERE tripId = :tripId AND timestamp BETWEEN :fromMs AND :toMs AND eventCause IS NOT NULL ORDER BY timestamp")
     suspend fun getEventsForTrip(tripId: Long, fromMs: Long, toMs: Long): List<TripData>
 
@@ -462,8 +450,11 @@ interface TripDao {
     @Query("SELECT COUNT(*) FROM trip_events WHERE tripId = :tripId")
     suspend fun countEventsForTrip(tripId: Long): Int
 
-    @Query("SELECT COUNT(*) FROM trip_events WHERE tripId = :tripId AND provenance = 'MANUAL_MARKER'")
-    suspend fun countManualEventsForTrip(tripId: Long): Int
+    @Query("SELECT COUNT(*) FROM trip_events WHERE tripId = :tripId AND provenance = 'VOICE_RECOGNIZED'")
+    suspend fun countVoiceEventsForTrip(tripId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM trip_events WHERE tripId = :tripId AND locationFixAgeMs > :maxAgeMs")
+    suspend fun countStaleEventsForTrip(tripId: Long, maxAgeMs: Long): Int
 
     @Query("SELECT COUNT(*) FROM trip_photos WHERE tripId = :tripId")
     suspend fun countPhotosForTrip(tripId: Long): Int
@@ -486,12 +477,6 @@ interface TripDao {
     @Query("SELECT COALESCE(MAX(annotationVersion), 0) FROM event_annotations WHERE eventId = :eventId")
     suspend fun getLatestAnnotationVersion(eventId: String): Int
 
-    @Query("SELECT * FROM event_secondary_causes WHERE eventId = :eventId ORDER BY createdAt, causeCode")
-    suspend fun getSecondaryCausesForEvent(eventId: String): List<EventSecondaryCause>
-
-    @Query("SELECT * FROM event_secondary_causes ORDER BY eventId, createdAt, causeCode")
-    suspend fun getAllSecondaryCausesForExport(): List<EventSecondaryCause>
-
     @Query("UPDATE trip_events SET primaryCauseCode = :primaryCauseCode, confidenceCode = :confidenceCode, trafficState = :trafficState, status = 'ANNOTATED', notes = :notes, codebookVersion = :codebookVersion WHERE eventId = :eventId")
     suspend fun updateEventAnnotation(
         eventId: String,
@@ -510,8 +495,8 @@ interface TripDao {
         visible: Boolean
     ): Int
 
-    @Query("DELETE FROM event_secondary_causes WHERE eventId = :eventId")
-    suspend fun deleteSecondaryCauses(eventId: String)
+    @Query("UPDATE trips SET causeBreakdown = :causeBreakdown WHERE id = :tripId")
+    suspend fun updateTripCauseBreakdown(tripId: Long, causeBreakdown: String): Int
 
     @Transaction
     suspend fun annotateEvent(
@@ -523,6 +508,7 @@ interface TripDao {
             "an annotated event requires one primary cause"
         }
         EventAnnotationValidator.requireValid(annotation)
+        val event = getTripEvent(eventId) ?: error("event $eventId does not exist")
         check(
             updateEventAnnotation(
                 eventId = eventId,
@@ -543,8 +529,6 @@ interface TripDao {
                 annotationTimestampMs = annotation.annotationTimestampMs,
                 reviewerId = annotation.reviewerId,
                 primaryCauseCode = primaryCause,
-                secondaryCause1 = annotation.secondaryCauseCodes.getOrNull(0),
-                secondaryCause2 = annotation.secondaryCauseCodes.getOrNull(1),
                 trafficState = annotation.trafficState,
                 confidenceCode = annotation.confidenceCode,
                 notes = notes ?: annotation.notes,
@@ -552,10 +536,14 @@ interface TripDao {
                 supersedesAnnotationId = previous?.annotationId
             )
         )
-        deleteSecondaryCauses(eventId)
-        insertSecondaryCauses(annotation.secondaryCauseCodes.map { cause ->
-            EventSecondaryCause(eventId = eventId, causeCode = cause, codebookVersion = ResearchCodebook.VERSION)
-        })
+        val breakdown = JSONObject().apply {
+            getTripEvents(event.tripId)
+                .mapNotNull { it.primaryCauseCode }
+                .groupingBy { it }
+                .eachCount()
+                .forEach { (cause, count) -> put(cause, count) }
+        }.toString()
+        updateTripCauseBreakdown(event.tripId, breakdown)
     }
 
     @Transaction
@@ -674,6 +662,17 @@ interface TripDao {
     @Query("UPDATE trips SET qaStatus = :qaStatus, qaNotes = :qaNotes WHERE id = :tripId")
     suspend fun updateTripQa(tripId: Long, qaStatus: String, qaNotes: String?): Int
 
+    @Query("UPDATE trips SET exclusionCode = :exclusionCode, qaStatus = :qaStatus, qaNotes = :qaNotes WHERE id = :tripId")
+    suspend fun updateTripExclusion(
+        tripId: Long,
+        exclusionCode: String?,
+        qaStatus: String,
+        qaNotes: String?
+    ): Int
+
+    @Query("UPDATE trips SET exclusionCode = :exclusionCode WHERE id = :tripId")
+    suspend fun updateTripExclusionCode(tripId: Long, exclusionCode: String?): Int
+
     @Query("SELECT * FROM trips WHERE status = ${TripStatus.RECORDING}")
     suspend fun getAbandonedTrips(): List<Trip>
 
@@ -759,6 +758,9 @@ interface TripDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAudio(audio: TripAudio)
 
+    @Query("UPDATE trip_audio SET status = :status, interruptionReason = :interruptionReason WHERE audioId = :audioId")
+    suspend fun updateAudioStatus(audioId: String, status: String, interruptionReason: String?): Int
+
     @Query("UPDATE trip_audio SET endTimeMs = :endTimeMs, endElapsedRealtimeNanos = :endElapsedRealtimeNanos, fileSizeBytes = :fileSizeBytes, sha256 = :sha256, status = :status, interruptionReason = :interruptionReason WHERE audioId = :audioId")
     suspend fun completeAudio(
         audioId: String,
@@ -770,8 +772,8 @@ interface TripDao {
         interruptionReason: String?
     ): Int
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertSecondaryCauses(causes: List<EventSecondaryCause>)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAuditRevisionIfAbsent(revision: AuditRevision): Long
 
     @Insert
     suspend fun insertAuditRevision(revision: AuditRevision)
@@ -996,7 +998,29 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         db.execSQL("ALTER TABLE trip_data ADD COLUMN sensorType INTEGER")
         db.execSQL("ALTER TABLE trip_data ADD COLUMN sensorAccuracy INTEGER")
         db.execSQL("ALTER TABLE trip_data ADD COLUMN sourceType TEXT")
+        db.execSQL("UPDATE trip_data SET sourceType = 'LOCATION' WHERE sourceType IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL")
+        db.execSQL("UPDATE trip_data SET sourceType = 'ACCELEROMETER' WHERE sourceType IS NULL AND accelZ IS NOT NULL")
+        db.execSQL("UPDATE trip_data SET sourceType = 'GYROSCOPE' WHERE sourceType IS NULL AND gyroX IS NOT NULL")
+        db.execSQL("UPDATE trip_data SET sourceType = 'ROTATION' WHERE sourceType IS NULL AND rotW IS NOT NULL")
+        db.execSQL("UPDATE trip_data SET sourceType = 'EVENT' WHERE eventCause IS NOT NULL")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_trip_data_tripId_timestamp ON trip_data(tripId, timestamp)")
+        db.execSQL(
+            """
+            UPDATE trip_data
+            SET tripId = (
+                SELECT id FROM trips
+                WHERE trip_data.timestamp BETWEEN trips.startTimeMs AND trips.endTimeMs
+                ORDER BY trips.id
+                LIMIT 1
+            )
+            WHERE tripId = 0
+              AND (latitude IS NOT NULL AND longitude IS NOT NULL OR eventCause IS NOT NULL)
+              AND EXISTS (
+                  SELECT 1 FROM trips
+                  WHERE trip_data.timestamp BETWEEN trips.startTimeMs AND trips.endTimeMs
+              )
+            """.trimIndent()
+        )
 
         db.execSQL("ALTER TABLE trips ADD COLUMN tripUuid TEXT NOT NULL DEFAULT ''")
         db.execSQL("ALTER TABLE trips ADD COLUMN sessionId TEXT NOT NULL DEFAULT '${ResearchStudy.SESSION_ID}'")
@@ -1087,6 +1111,7 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
             """.trimIndent()
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS index_trip_events_tripId_markerTimeMs ON trip_events(tripId, markerTimeMs)")
+        db.migrateLegacyEventRows()
 
         db.execSQL(
             """
@@ -1253,20 +1278,255 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+private fun canonicalCauseSql(column: String): String = """
+    CASE
+        WHEN $column IS NULL THEN NULL
+        WHEN UPPER(TRIM($column)) IN ('SIG', 'SIGNAL') THEN 'SIGNAL'
+        WHEN UPPER(TRIM($column)) IN ('QUE', 'QUEUE') THEN 'QUEUE'
+        WHEN UPPER(TRIM($column)) = 'BUS' THEN 'BUS'
+        WHEN UPPER(TRIM($column)) IN ('PED', 'PEDESTRIAN') THEN 'PED'
+        WHEN UPPER(TRIM($column)) IN ('RDS', 'ROUGH', 'ROUGHNESS', 'POTHOLE') THEN 'ROUGH'
+        WHEN UPPER(TRIM($column)) IN ('INC', 'CONSTRUCTION') THEN 'CONSTRUCTION'
+        WHEN UPPER(TRIM($column)) IN ('PRK', 'FRICTION') THEN 'FRICTION'
+        WHEN UPPER(TRIM($column)) IN ('TRN', 'TURNING') THEN 'TURNING'
+        WHEN UPPER(TRIM($column)) IN ('ENC', 'MARKET') THEN 'MARKET'
+        WHEN UPPER(TRIM($column)) IN ('UNK', 'UNCLASSIFIED', 'UNKNOWN') THEN 'UNKNOWN'
+        ELSE 'UNKNOWN'
+    END
+""".trimIndent()
+
+private fun SupportSQLiteDatabase.migrateLegacyEventRows() {
+    query(
+        """
+        SELECT tripId, timestamp, eventCause, sourceElapsedRealtimeNanos, latitude,
+               longitude, speedKmh, sourceEpochTimeMs, provider,
+               horizontalAccuracyMeters, speedValid
+        FROM trip_data
+        WHERE tripId > 0 AND eventCause IS NOT NULL
+        ORDER BY id
+        """.trimIndent()
+    ).use { cursor ->
+        while (cursor.moveToNext()) {
+            fun stringOrNull(index: Int): String? = if (cursor.isNull(index)) null else cursor.getString(index)
+            fun longOrNull(index: Int): Long? = if (cursor.isNull(index)) null else cursor.getLong(index)
+            fun doubleOrNull(index: Int): Double? = if (cursor.isNull(index)) null else cursor.getDouble(index)
+            fun floatOrNull(index: Int): Float? = if (cursor.isNull(index)) null else cursor.getFloat(index)
+            fun integerOrNull(index: Int): Int? = if (cursor.isNull(index)) null else cursor.getInt(index)
+
+            val tripId = cursor.getLong(0)
+            val markerTimeMs = cursor.getLong(1)
+            val primaryCauseCode = CauseCodeMigration.toCanonicalOrUnknown(cursor.getString(2))
+            val locationFixTimeMs = longOrNull(7)
+            execSQL(
+                """
+                INSERT INTO trip_events(
+                    eventId, tripId, markerTimeMs, markerElapsedRealtimeNanos,
+                    experiencedLatitude, experiencedLongitude, locationAccuracyMeters,
+                    locationProvider, locationFixTimeMs, locationFixElapsedRealtimeNanos,
+                    locationFixAgeMs, speedValid, speedKmh, primaryCauseCode,
+                    status, provenance, codebookVersion, createdAt
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf<Any?>(
+                    UUID.randomUUID().toString(),
+                    tripId,
+                    markerTimeMs,
+                    longOrNull(3),
+                    doubleOrNull(4),
+                    doubleOrNull(5),
+                    floatOrNull(9),
+                    stringOrNull(8),
+                    locationFixTimeMs,
+                    longOrNull(3),
+                    locationFixTimeMs?.let { markerTimeMs - it },
+                    integerOrNull(10),
+                    floatOrNull(6),
+                    primaryCauseCode,
+                    EventStatus.PENDING,
+                    EventProvenance.LEGACY_IMPORTED,
+                    ResearchCodebook.VERSION,
+                    markerTimeMs
+                )
+            )
+        }
+    }
+}
+
+private fun SupportSQLiteDatabase.tableExists(tableName: String): Boolean {
+    query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        arrayOf(tableName)
+    ).use { cursor ->
+        return cursor.moveToFirst()
+    }
+}
+
+private fun SupportSQLiteDatabase.recordLegacyNonPrimaryValue(
+    eventId: String,
+    value: String,
+    revisionTimeMs: Long
+) {
+    val tripId = query(
+        "SELECT tripId FROM trip_events WHERE eventId = ? LIMIT 1",
+        arrayOf(eventId)
+    ).use { cursor ->
+        if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+    }
+    execSQL(
+        """
+        INSERT INTO audit_revisions(
+            revisionId, tripId, eventId, fieldName, originalValue, currentValue,
+            editor, revisionTimeMs, reason, revisionType
+        ) VALUES(?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+        """.trimIndent(),
+        arrayOf<Any?>(
+            UUID.randomUUID().toString(),
+            tripId,
+            eventId,
+            "legacy_non_primary_annotation_value",
+            value,
+            revisionTimeMs,
+            "Retained during removal of the pre-v8 non-primary annotation model",
+            "MIGRATION_LEGACY_NON_PRIMARY"
+        )
+    )
+}
+
+private fun SupportSQLiteDatabase.preserveLegacyNonPrimaryValues() {
+    if (tableExists("event_annotations")) {
+        query(
+            "SELECT eventId, annotationTimestampMs, secondaryCause1, secondaryCause2 FROM event_annotations"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val eventId = cursor.getString(0)
+                val timestamp = cursor.getLong(1)
+                val values = listOfNotNull(
+                    cursor.getString(2)?.takeIf { it.isNotBlank() },
+                    cursor.getString(3)?.takeIf { it.isNotBlank() }
+                )
+                if (values.isNotEmpty()) {
+                    recordLegacyNonPrimaryValue(
+                        eventId = eventId,
+                        value = JSONObject().put("values", values).toString(),
+                        revisionTimeMs = timestamp
+                    )
+                }
+            }
+        }
+    }
+
+    if (tableExists("event_secondary_causes")) {
+        query("SELECT eventId, causeCode, createdAt FROM event_secondary_causes").use { cursor ->
+            while (cursor.moveToNext()) {
+                recordLegacyNonPrimaryValue(
+                    eventId = cursor.getString(0),
+                    value = JSONObject().put("value", cursor.getString(1)).toString(),
+                    revisionTimeMs = cursor.getLong(2)
+                )
+            }
+        }
+    }
+}
+
+private fun SupportSQLiteDatabase.normalizeLegacyCauseBreakdowns() {
+    query("SELECT id, causeBreakdown FROM trips").use { cursor ->
+        while (cursor.moveToNext()) {
+            val tripId = cursor.getLong(0)
+            val normalized = try {
+                val source = JSONObject(cursor.getString(1))
+                val result = JSONObject()
+                source.keys().forEach { key ->
+                    val canonical = CauseCodeMigration.toCanonicalOrUnknown(key)
+                    result.put(canonical, result.optInt(canonical, 0) + source.optInt(key, 0))
+                }
+                result.toString()
+            } catch (_: Exception) {
+                "{}"
+            }
+            execSQL(
+                "UPDATE trips SET causeBreakdown = ? WHERE id = ?",
+                arrayOf<Any?>(normalized, tripId)
+            )
+        }
+    }
+}
+
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trips ADD COLUMN exportFormatVersion TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN protocolVersion TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN causeConfigJson TEXT")
+        db.execSQL("ALTER TABLE trips ADD COLUMN exclusionCode TEXT")
+
+        db.execSQL("ALTER TABLE trip_events ADD COLUMN provisionalCauseCode TEXT")
+        db.execSQL(
+            "UPDATE trip_events SET provisionalCauseCode = ${canonicalCauseSql("primaryCauseCode")} WHERE provisionalCauseCode IS NULL"
+        )
+        db.execSQL("UPDATE trip_events SET primaryCauseCode = ${canonicalCauseSql("primaryCauseCode")}")
+        db.execSQL("UPDATE trip_data SET eventCause = ${canonicalCauseSql("eventCause")} WHERE eventCause IS NOT NULL")
+        db.execSQL("UPDATE event_annotations SET primaryCauseCode = ${canonicalCauseSql("primaryCauseCode")}")
+        db.normalizeLegacyCauseBreakdowns()
+
+        // Preserve old non-primary values in the generic audit trail without
+        // carrying the removed model into the active schema.
+        db.preserveLegacyNonPrimaryValues()
+
+        db.execSQL(
+            """
+            CREATE TABLE event_annotations_v8 (
+                annotationId TEXT NOT NULL,
+                eventId TEXT NOT NULL,
+                annotationVersion INTEGER NOT NULL,
+                annotationTimestampMs INTEGER NOT NULL,
+                reviewerId TEXT,
+                primaryCauseCode TEXT NOT NULL,
+                trafficState TEXT,
+                confidenceCode INTEGER,
+                notes TEXT,
+                codebookVersion TEXT NOT NULL,
+                supersedesAnnotationId TEXT,
+                createdAt INTEGER NOT NULL,
+                PRIMARY KEY(annotationId),
+                FOREIGN KEY(eventId) REFERENCES trip_events(eventId) ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO event_annotations_v8(
+                annotationId, eventId, annotationVersion, annotationTimestampMs,
+                reviewerId, primaryCauseCode, trafficState, confidenceCode, notes,
+                codebookVersion, supersedesAnnotationId, createdAt
+            )
+            SELECT annotationId, eventId, annotationVersion, annotationTimestampMs,
+                   reviewerId, primaryCauseCode, trafficState, confidenceCode, notes,
+                   codebookVersion, supersedesAnnotationId, createdAt
+            FROM event_annotations
+            """.trimIndent()
+        )
+        db.execSQL("DROP TABLE event_annotations")
+        db.execSQL("ALTER TABLE event_annotations_v8 RENAME TO event_annotations")
+        db.execSQL(
+            "CREATE UNIQUE INDEX index_event_annotations_eventId_annotationVersion " +
+                "ON event_annotations(eventId, annotationVersion)"
+        )
+        db.execSQL("DROP TABLE IF EXISTS event_secondary_causes")
+    }
+}
+
 @Database(
     entities = [
         TripData::class,
         Trip::class,
         TripPhoto::class,
         TripEvent::class,
-        EventSecondaryCause::class,
         SensorMetadata::class,
         TripQuality::class,
         TripAudio::class,
         AuditRevision::class,
         EventAnnotationRevision::class
     ],
-    version = 7
+    version = 8
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tripDao(): TripDao
@@ -1288,7 +1548,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .build()
                 INSTANCE = instance

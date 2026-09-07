@@ -1,16 +1,81 @@
 package com.example.roadlog
 
+import java.util.Locale
+
 object ResearchCodebook {
-    const val VERSION = "2"
-    const val UNCLASSIFIED_CODE = "UNK"
+    const val VERSION = ResearchVersions.CODEBOOK_VERSION
+    const val UNKNOWN_CODE = "UNKNOWN"
 
     val primaryCodes: Set<String> = setOf(
-        "SIG", "QUE", "BUS", "PED", "PRK", "TRN", "ENC", "RDS", "INC", UNCLASSIFIED_CODE
+        "SIGNAL",
+        "QUEUE",
+        "BUS",
+        "PED",
+        "ROUGH",
+        "CONSTRUCTION",
+        "FRICTION",
+        "TURNING",
+        "MARKET",
+        UNKNOWN_CODE
     )
 
     val trafficStates: Set<String> = setOf("LIGHT", "MODERATE", "DENSE_MOVING", "QUEUED")
 
     fun isPrimaryCodeValid(code: String): Boolean = code in primaryCodes
+}
+
+object ResearchVersions {
+    const val CODEBOOK_VERSION = "3"
+    const val EXPORT_FORMAT_VERSION = "2"
+    const val PROTOCOL_VERSION = "1"
+    const val SENSOR_PROFILE_VERSION = "1"
+    const val ROOM_SCHEMA_VERSION = 8
+}
+
+object TripExclusion {
+    const val INCIDENT_OR_BREAKDOWN = "INCIDENT_OR_BREAKDOWN"
+
+    val values = setOf(INCIDENT_OR_BREAKDOWN)
+}
+
+object ResearchQualityThresholds {
+    const val EVENT_LOCATION_STALE_WARNING_MS = 5_000L
+}
+
+/** Maps values written by pre-v8 builds to the v3 canonical analytical vocabulary. */
+object CauseCodeMigration {
+    val legacyToCanonical: Map<String, String> = mapOf(
+        "SIG" to "SIGNAL",
+        "SIGNAL" to "SIGNAL",
+        "QUE" to "QUEUE",
+        "QUEUE" to "QUEUE",
+        "BUS" to "BUS",
+        "PED" to "PED",
+        "PEDESTRIAN" to "PED",
+        "RDS" to "ROUGH",
+        "ROUGH" to "ROUGH",
+        "ROUGHNESS" to "ROUGH",
+        "POTHOLE" to "ROUGH",
+        "INC" to "CONSTRUCTION",
+        "CONSTRUCTION" to "CONSTRUCTION",
+        "PRK" to "FRICTION",
+        "FRICTION" to "FRICTION",
+        "TRN" to "TURNING",
+        "TURNING" to "TURNING",
+        "ENC" to "MARKET",
+        "MARKET" to "MARKET",
+        "UNK" to ResearchCodebook.UNKNOWN_CODE,
+        "UNCLASSIFIED" to ResearchCodebook.UNKNOWN_CODE,
+        "UNKNOWN" to ResearchCodebook.UNKNOWN_CODE
+    )
+
+    fun toCanonical(value: String?): String? {
+        val normalized = value?.trim()?.uppercase(Locale.ROOT) ?: return null
+        return legacyToCanonical[normalized]
+    }
+
+    fun toCanonicalOrUnknown(value: String?): String =
+        toCanonical(value) ?: ResearchCodebook.UNKNOWN_CODE
 }
 
 object ResearchDirection {
@@ -47,13 +112,10 @@ object TripQaStatus {
 }
 
 object EventProvenance {
-    const val MANUAL_MARKER = "MANUAL_MARKER"
     const val VOICE_RECOGNIZED = "VOICE_RECOGNIZED"
-    const val AUTO_DETECTED = "AUTO_DETECTED"
-    const val MANUAL_AND_AUTO = "MANUAL_AND_AUTO"
-    const val REVIEW_CREATED = "REVIEW_CREATED"
+    const val LEGACY_IMPORTED = "LEGACY_IMPORTED"
 
-    val values = setOf(MANUAL_MARKER, VOICE_RECOGNIZED, AUTO_DETECTED, MANUAL_AND_AUTO, REVIEW_CREATED)
+    val values = setOf(VOICE_RECOGNIZED, LEGACY_IMPORTED)
 }
 
 object EventStatus {
@@ -92,7 +154,6 @@ object TripStartValidator {
 
 data class EventAnnotation(
     val primaryCauseCode: String?,
-    val secondaryCauseCodes: List<String>,
     val confidenceCode: Int?,
     val trafficState: String?,
     val reviewerId: String? = null,
@@ -105,21 +166,6 @@ object EventAnnotationValidator {
         val errors = mutableListOf<String>()
         annotation.primaryCauseCode?.let {
             if (!ResearchCodebook.isPrimaryCodeValid(it)) errors += "invalid primary cause code"
-        }
-        if (annotation.secondaryCauseCodes.size > 2) errors += "at most two secondary causes are allowed"
-        if (annotation.secondaryCauseCodes.distinct().size != annotation.secondaryCauseCodes.size) {
-            errors += "secondary causes must be distinct"
-        }
-        if (annotation.primaryCauseCode != null && annotation.primaryCauseCode in annotation.secondaryCauseCodes) {
-            errors += "primary cause cannot also be secondary"
-        }
-        if (annotation.secondaryCauseCodes.any { !ResearchCodebook.isPrimaryCodeValid(it) }) {
-            errors += "invalid secondary cause code"
-        }
-        if (annotation.primaryCauseCode == ResearchCodebook.UNCLASSIFIED_CODE &&
-            annotation.secondaryCauseCodes.any { it != ResearchCodebook.UNCLASSIFIED_CODE }
-        ) {
-            errors += "UNCLASSIFIED should not have confident secondary causes"
         }
         annotation.confidenceCode?.let {
             if (it !in 0..3) errors += "confidence code must be 0, 1, 2, or 3"

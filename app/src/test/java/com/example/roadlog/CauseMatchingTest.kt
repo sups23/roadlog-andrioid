@@ -13,17 +13,17 @@ class CauseMatchingTest {
         activationPhrases = listOf("log"),
         causes = listOf(
             CauseDefinition(
-                code = "POTHOLE",
-                displayName = "POTHOLE",
-                shortForm = "POTHL",
+                code = "ROUGH",
+                displayName = "ROUGH",
+                shortForm = "ROUGH",
                 phrases = listOf("pothole"),
                 variants = listOf("pothol")
             ),
             CauseDefinition(
-                code = "UNK",
-                displayName = "UNCLASSIFIED",
-                shortForm = "UNCLASSIFIED",
-                phrases = listOf("unclassified"),
+                code = ResearchCodebook.UNKNOWN_CODE,
+                displayName = ResearchCodebook.UNKNOWN_CODE,
+                shortForm = ResearchCodebook.UNKNOWN_CODE,
+                phrases = listOf("unknown", "unclassified"),
                 variants = emptyList(),
                 voiceOnly = false
             )
@@ -43,7 +43,37 @@ class CauseMatchingTest {
 
     @Test
     fun `explicit unclassified phrase maps to its own code`() {
-        assertEquals("UNK", config.phraseToCauseMap["log unclassified"])
-        assertTrue(config.findByCode("UNK")?.voiceOnly == false)
+        assertEquals(ResearchCodebook.UNKNOWN_CODE, config.phraseToCauseMap["log unclassified"])
+        assertTrue(config.findByCode(ResearchCodebook.UNKNOWN_CODE)?.voiceOnly == false)
+    }
+
+    @Test
+    fun `activated commands return canonical codes`() {
+        val result = CauseCommandParser(config).parse("Log pothol")
+
+        assertEquals("ROUGH", result.causeCode)
+        assertNull(result.rejection)
+    }
+
+    @Test
+    fun `ambiguous command is rejected instead of choosing one cause`() {
+        val result = CauseCommandParser(config).parse("log pothole unknown")
+
+        assertNull(result.causeCode)
+        assertEquals(CauseCommandRejection.AMBIGUOUS_COMMAND, result.rejection)
+    }
+
+    @Test
+    fun `missing activation and recognizer unknown are rejected`() {
+        val parser = CauseCommandParser(config)
+
+        assertEquals(
+            CauseCommandRejection.MISSING_ACTIVATION,
+            parser.parse("pothole").rejection
+        )
+        assertEquals(
+            CauseCommandRejection.UNKNOWN_COMMAND,
+            parser.parse("log [unk]").rejection
+        )
     }
 }

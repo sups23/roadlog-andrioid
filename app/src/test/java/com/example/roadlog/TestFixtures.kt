@@ -17,7 +17,7 @@ object TestFixtures {
         eventCount = 3,
         gpsPointCount = 100,
         accelPointCount = 200,
-        causeBreakdown = "{\"SIG\":1,\"QUE\":1,\"RDS\":1}",
+        causeBreakdown = "{\"SIGNAL\":1,\"QUEUE\":1,\"ROUGH\":1}",
         createdAt = BASE_TIME_MS
     )
 
@@ -31,7 +31,7 @@ object TestFixtures {
         eventCount = 2,
         gpsPointCount = 80,
         accelPointCount = 160,
-        causeBreakdown = "{\"BUS\":1,\"RDS\":1}",
+        causeBreakdown = "{\"BUS\":1,\"ROUGH\":1}",
         createdAt = BASE_TIME_MS + HOUR_MS / 2
     )
 
@@ -55,7 +55,7 @@ object TestFixtures {
 
     fun eventRowsForTrip(tripId: Long, startMs: Long, endMs: Long): List<TripData> {
         val stepMs = (endMs - startMs) / 4
-        val causes = listOf("SIGNAL", "QUEUE", "BUS", "POTHOLE")
+        val causes = listOf("SIGNAL", "QUEUE", "BUS", "ROUGH")
         return causes.mapIndexed { i, cause ->
             TripData(
                 tripId = tripId,
@@ -142,7 +142,7 @@ object TestFixtures {
         eventCount = 12,
         gpsPointCount = 10_000,
         accelPointCount = 50_000,
-        causeBreakdown = "{\"SIG\":3,\"QUE\":2,\"RDS\":4,\"BUS\":1,\"TRN\":1,\"ENC\":1}",
+        causeBreakdown = "{\"SIGNAL\":3,\"QUEUE\":2,\"ROUGH\":4,\"BUS\":1,\"TURNING\":1,\"MARKET\":1}",
         createdAt = BASE_TIME_MS - 7 * 24 * HOUR_MS
     )
 

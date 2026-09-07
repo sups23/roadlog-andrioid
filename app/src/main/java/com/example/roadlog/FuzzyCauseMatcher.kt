@@ -34,33 +34,30 @@ class FuzzyCauseMatcher(private val config: CauseConfig) {
      *         fuzzy threshold.
      */
     fun findBestMatch(spoken: String): MatchResult? {
+        return findBestMatches(spoken).firstOrNull()
+    }
+
+    /** Returns the best match for each cause in deterministic score order. */
+    fun findBestMatches(spoken: String): List<MatchResult> {
         val cleaned = CauseConfig.normalizeSpeech(spoken)
 
-        if (cleaned.isEmpty()) return null
+        if (cleaned.isEmpty()) return emptyList()
 
-        var bestCause = ""
-        var bestWord = ""
-        var bestScore = 0.0
-
-        // First pass: try matching the entire cleaned phrase against whole-phrase
-        // keywords. This is important for multi-word grammar outputs such as
-        // "traffic signal" or "turning vehicle".
-        for ((causeCode, keyword) in allKeywords) {
-            val score = similarity(cleaned, keyword)
-            if (score > bestScore) {
-                bestScore = score
-                bestCause = causeCode
-                bestWord = keyword
+        val matches = allKeywords
+            .groupBy { it.first }
+            .map { (causeCode, keywords) ->
+                keywords
+                    .map { (_, keyword) -> keyword to similarity(cleaned, keyword) }
+                    .maxWithOrNull(compareBy<Pair<String, Double>> { it.second }.thenBy { it.first })
+                    ?.let { (keyword, score) -> MatchResult(causeCode, keyword, score) }
             }
-        }
+            .filterNotNull()
+            .sortedWith(compareByDescending<MatchResult> { it.score }.thenBy { it.causeCode })
 
-        Log.d(TAG, "Fuzzy match for '$spoken' → best='$bestWord' cause=$bestCause score=%.2f".format(bestScore))
-
-        return if (bestScore >= config.fuzzyThreshold) {
-            MatchResult(bestCause, bestWord, bestScore)
-        } else {
-            null
+        matches.firstOrNull()?.let { best ->
+            Log.d(TAG, "Fuzzy match for '$spoken' -> best='${best.matchedWord}' cause=${best.causeCode} score=%.2f".format(best.score))
         }
+        return matches
     }
 
     /**

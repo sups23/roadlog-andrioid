@@ -67,7 +67,7 @@ data class DelayEvent(
     val locationFixTimeMs: Long? = null,
     val locationFixElapsedRealtimeNanos: Long? = null,
     val speedValid: Boolean? = null,
-    val provenance: String = EventProvenance.MANUAL_MARKER,
+    val provenance: String = EventProvenance.VOICE_RECOGNIZED,
     val transcript: String? = null,
     val recognitionConfidence: Float? = null
 )
