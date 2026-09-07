@@ -1,73 +1,78 @@
 # Export Data Dictionary
 
-All timestamps are exported as decimal integers. Epoch timestamps use Unix
-milliseconds. `elapsed_realtime` and sensor timestamps use Android monotonic
-nanoseconds. Raw fields are authoritative; derived fields are reproducible
-summaries or offline assignments.
+All restricted timestamps are decimal integers. Epoch timestamps use Unix
+milliseconds; elapsed and sensor timestamps use Android monotonic nanoseconds.
+Public exports replace absolute times with per-trip `elapsed_ms` values and omit
+precise coordinates. Raw restricted fields are authoritative; derived fields are
+reproducible summaries or offline assignments.
 
-## Trips
+## Archive Modes
 
-| Field | Type / unit | Allowed values | Nullable | Raw/derived | Meaning / source |
-|---|---|---|---|---|---|
-| `trip_uuid` | string | UUID | No | Raw identity | Stable traversal identity |
-| `session_id` | string | `STUDY_SESSION` | No | Raw | Static study session identity |
-| `corridor_id` | string | `STUDY_CORRIDOR` | No | Raw | Static selected-corridor identity |
-| `direction` | string | `A_TO_B`, `B_TO_A` | No for research trips | Raw | Directional analytical variable |
-| `study_date_local` | ISO date | `YYYY-MM-DD` | No for new trips | Raw | Kathmandu local collection date |
-| `time_zone_id` | string | `Asia/Kathmandu` | No for new trips | Raw metadata | Date interpretation zone |
-| `observation_period` | string | `MORNING`, `OFF_PEAK`, `EVENING` | No for research trips | Raw | Explicit field-selected period |
-| `qa_status` | string | `UNREVIEWED`, `VALID`, `VALID_WITH_WARNINGS`, `INVALID` | No | Reviewed/derived | Research usability decision |
-| `partial_traversal` | Boolean | `true`, `false` | No | QA | Whether collection ended before full traversal |
-| `coverage_end_time_ms` | epoch ms | integer | Yes | Raw/QA | Last preserved coverage boundary |
-| `route_diversion` | Boolean | `true`, `false` | No | QA | Observer-reported route deviation |
-| `recording_interruption` | Boolean | `true`, `false` | No | QA | Recording/service interruption |
-| `gps_interruption` | Boolean | `true`, `false` | No | QA | GPS stream interruption |
-| `sensor_interruption` | Boolean | `true`, `false` | No | QA | Motion-sensor interruption |
-| `sensor_profile_version` | string | version | Yes | Metadata | Requested sampling configuration |
-| `codebook_version` | string | version | Yes | Metadata | Cause taxonomy version |
+| Mode | Intended boundary | Includes |
+|---|---|---|
+| `RESTRICTED_RAW` | Controlled research storage | Raw GPS, sensor timing, audio, transcripts, device metadata, audit values, and historical media when present |
+| `PUBLIC_DEIDENTIFIED` | External sharing | Relative-time trip/event/sensor data, canonical causes, QA flags, and version metadata; no precise GPS, audio, transcripts, reviewer notes, or device identity |
 
-## Device and Sensor Metadata
+Both modes include `manifest.json`, `metadata/schema.json`,
+`metadata/codebook.json`, per-trip runtime cause configuration files, and
+`checksums.sha256`.
 
-`metadata/device.json` records `device_id`, manufacturer, device model, Android
-version, app version, Room schema version, and sensor profile version. Observer,
-vehicle, pass, and mount fields are intentionally not collected.
-`metadata/sensors.csv` records the selected profile, requested period,
-registration result, sensor name/vendor/version, and the raw sensor-type code,
-including unavailable sensor rows.
+## Trip Fields
+
+Restricted `trips/trips.csv` includes the local `id`, `trip_uuid`, absolute start/end
+times, raw timestamps, static `session_id`/`corridor_id`, direction, period, QA
+fields, interruption fields, version fields, `cause_config_path`, and
+`exclusion_code`. Public `trips/trips.csv` contains the pseudonymous
+`trip_uuid`, duration, summary counts, direction/period, QA flags, exclusion,
+version fields, and `cause_config_path`, but no absolute time, local ID, device
+ID, coordinates, or free-text notes.
+
+`exclusion_code` is nullable or `INCIDENT_OR_BREAKDOWN`. It excludes a trip from
+analysis without deleting its raw data.
+
+## Event Fields
+
+| Field | Restricted | Public | Meaning |
+|---|---|---|---|
+| `event_id` | Yes | Yes | Stable event identity |
+| `trip_id` | Yes | No | Local owning-trip ID |
+| `trip_uuid` | Yes | Yes | Pseudonymous owning-trip identity |
+| `marker_time_ms` | Yes | No | Absolute marker time |
+| `marker_elapsed_ms` | No | Yes | Marker time relative to trip start |
+| `experienced_latitude/longitude` | Yes | No | Experienced location |
+| `source_latitude/longitude` | Yes | No | Reviewed source location |
+| `provisional_cause_code` | Yes | Yes | Accepted voice candidate retained for provenance |
+| `primary_cause_code` | Yes | Yes | One canonical current/reviewed cause |
+| `provenance` | Yes | Yes | Current input is `VOICE_RECOGNIZED`; migrated pre-v8 rows use `LEGACY_IMPORTED` |
+| `transcript` | Yes | No | Recognized speech text |
+| `confidence_code` | Yes | Yes | Review confidence `0` through `3` |
+| `traffic_state` | Yes | Yes | `LIGHT`, `MODERATE`, `DENSE_MOVING`, or `QUEUED` |
+
+Canonical causes are `SIGNAL`, `QUEUE`, `BUS`, `PED`, `ROUGH`, `CONSTRUCTION`,
+`FRICTION`, `TURNING`, `MARKET`, and `UNKNOWN`. Friendly voice aliases are
+normalized before persistence. Ambiguous or unmatched commands are not events.
 
 ## Sensor Rows
 
-`sensors/trip_<id>.csv` preserves raw GPS, accelerometer, gyroscope, rotation,
-and event compatibility rows. GPS includes latitude, longitude, speed,
-provider, reported accuracy, bearing, altitude, source epoch time, and source
-elapsed time. Motion rows preserve raw axis/quaternion values, sensor source
-nanoseconds, callback time, sensor type, and sensor accuracy.
+Restricted `sensors/trip_<local-id>.csv` preserves GPS coordinates, provider,
+accuracy, speed/bearing, epoch and monotonic source timestamps, motion axes,
+quaternion values, callback times, sensor types, and source type. Public sensor
+files use `sensors/trip_<trip-uuid>.csv`, relative time, canonical event cause,
+speed, motion values, and sensor type/accuracy only; they contain no GPS fields
+or device-local row IDs.
 
-`timestamp_ms` is a derived alignment timestamp. `raw_timestamp` and
-`source_timestamp_nanos` must be used when maximum precision is required.
+## Audio, Audit, And Historical Media
 
-## Events and Annotations
+Restricted audio rows identify AAC-LC M4A segments by `audio_id`, sequence,
+timestamps, persisted status, final audio status, size, checksum, transcript,
+interruption reason, failure type, completeness, and file presence/usability.
+Failure types include encoder initialization, frame processing, segment
+finalization, interruption, and missing expected file. Missing or failed
+segments remain indexed. Public archives contain no audio index or audio files,
+but `qa/trips.json` retains the audio failure summary.
 
-| Field | Type / unit | Allowed values | Nullable | Raw/derived | Meaning |
-|---|---|---|---|---|---|
-| `event_id` | string | UUID | No | Raw identity | Stable slowdown marker identity |
-| `trip_id` / `trip_uuid` | integer/string | local ID plus UUID | No | Relationship | Owning traversal |
-| `marker_time_ms` | epoch ms | integer | No | Raw | Immediate marker time |
-| `experienced_latitude/longitude` | decimal degrees | WGS84 | Yes | Raw/observed | Where slowdown was experienced |
-| `source_latitude/longitude` | decimal degrees | WGS84 | Yes | Reviewed | Believed source location; separate from experienced location |
-| `event_provenance` | string | `MANUAL_MARKER`, `VOICE_RECOGNIZED`, `AUTO_DETECTED`, `MANUAL_AND_AUTO`, `REVIEW_CREATED` | No | Provenance | Evidence origin |
-| `primary_cause` | string | `SIG`, `QUE`, `BUS`, `PED`, `PRK`, `TRN`, `ENC`, `RDS`, `INC`, `UNK` | Yes until reviewed | Reviewed | Exactly one reviewed primary cause; `UNK` is displayed as `UNCLASSIFIED` |
-| `secondary_cause_1/2` | string | same cause codes | Yes | Reviewed | Zero to two distinct contributors |
-| `traffic_state` | string | `LIGHT`, `MODERATE`, `DENSE_MOVING`, `QUEUED` | Yes | Reviewed | Background traffic state |
-| `confidence` | integer | `0`, `1`, `2`, `3` | Yes | Reviewed | Attribution confidence |
-| `annotation_timestamp_ms` | epoch ms | integer | No | Raw revision metadata | Time annotation was submitted |
-| `annotation_version` | integer | positive | No | Revision metadata | Append-only revision number |
-
-Audio segments are AAC-LC M4A files linked to a trip by `audio_id`, sequence,
-start/end epoch time, start/end monotonic time, codec metadata, file size,
-checksum, and completion status.
-
-Photo rows retain a stable `capture_id`, event link, request/capture epoch and
-monotonic timestamps, location provenance, dimensions, checksum, usability, and
-privacy status. Missing or failed captures remain indexed rather than silently
-disappearing from the export.
+Restricted `audit/revisions.csv` retains append-only corrections and legacy
+non-primary values plus archival-audio failure status, type, reason, and file
+evidence. Public archives omit audit rows and reviewer/free-text data.
+Legacy photo rows and files are retained only for historical compatibility and
+restricted export/purge handling; current collection does not create photos.

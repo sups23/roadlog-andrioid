@@ -1,5 +1,10 @@
 # RoadLog Implementation Plan 1
 
+> **Historical plan:** The implementation has progressed beyond the v6/v7
+> baseline described below. Current source-of-truth notes are in `AGENTS.md`,
+> `docs/field-protocol.md`, and `research/thesis/android-app.md`; current
+> collection is voice-only with canonical single-primary causes and Room schema 8.
+
 This is an execution plan, not a request to implement all phases at once. Work on exactly one phase per session/checkpoint. After a phase is implemented and verified, commit only that phase, report the commit, and ask the user whether to continue. Do not start the next phase without explicit approval.
 
 ## 1. Repository Context

@@ -2,8 +2,8 @@
 
 RoadLog is an offline-first Android research instrument for repeated directional
 traversals of one configured Kathmandu corridor. It combines GPS, raw motion
-sensors, continuous segmented voice audio, offline speech recognition, optional
-photos, structured event annotation, and trip QA in one local-first logger.
+sensors, continuous segmented voice audio, offline speech recognition, structured
+event annotation, and trip QA in one local-first logger.
 
 ## Features
 
@@ -13,17 +13,17 @@ photos, structured event annotation, and trip QA in one local-first logger.
   observation-period codes.
 - Static study session/corridor IDs plus unique trip, event, media, and audio-segment identities.
 - Raw timestamp provenance and Kathmandu local study date.
-- Passenger-only categorized event marking with later primary/secondary annotation,
-  traffic state, confidence, and source-location review.
+- Driver-operated, hands-free voice event marking with one canonical primary cause,
+  provisional-cause provenance, traffic state, confidence, and source-location review.
 - Segmented AAC/M4A source audio from the same microphone stream used by Vosk.
 - Offline Vosk speech recognition for configurable road-condition causes.
-- Manual cause entry, including `UNCLASSIFIED`, from the main screen.
-- Optional automatic and manual CameraX photos with location and timestamps.
+- `log [CAUSE]` activation grammar with explicit `UNKNOWN` handling and ambiguous-command rejection.
 - OpenStreetMap route display and cached map tiles.
 - Room-backed trip history with route, event timeline, sensor charts, cause
-  breakdowns, structured annotations, QA status, and photos.
-- Offline ZIP research export with raw sensors, annotations, audio, metadata,
-  checksums, and manifest counts.
+  breakdowns, structured annotations, QA status, and historical media display.
+- Clearly labeled `RESTRICTED_RAW` and `PUBLIC_DEIDENTIFIED` ZIP exports with
+  checksums, manifest counts, version metadata, and per-trip runtime cause configuration.
+- Post-trip `INCIDENT_OR_BREAKDOWN` exclusion review and researcher-initiated purge.
 - Debug-only demo trip seeding for manual UI checks.
 
 ## Requirements
@@ -31,8 +31,7 @@ photos, structured event annotation, and trip QA in one local-first logger.
 - Android SDK 34 for compilation.
 - Android 8.0 / API 26 or newer.
 - A device or emulator with GPS, microphone, and accelerometer support.
-- Location and microphone permissions for recording. Camera permission is
-  needed only when photos are enabled.
+- Location and microphone permissions for recording.
 
 The app targets SDK 29 and supports the `armeabi-v7a`, `arm64-v8a`, `x86`, and
 `x86_64` ABIs.
@@ -73,8 +72,15 @@ Instrumentation tests require a connected device or emulator.
 - Speech causes, phrases, variants, and thresholds are defined in
   `app/src/main/assets/cause_config.json`.
 - Voice cause commands require the `log` activation phrase. For example,
-  say `log pothole` or `log unclassified`; unrelated speech, unmatched
-  words, and low-confidence results are ignored.
+  say `log roughness`, `log queue`, or `log unknown`; unrelated speech,
+  unmatched words, low-confidence results, and ambiguous commands are ignored.
+- Current canonical causes are `SIGNAL`, `QUEUE`, `BUS`, `PED`, `ROUGH`,
+  `CONSTRUCTION`, `FRICTION`, `TURNING`, `MARKET`, and `UNKNOWN`.
+- The collection screen has no camera or manual-cause controls. Legacy photo rows
+  remain only for historical compatibility and restricted export/purge handling.
+- `RESTRICTED_RAW` may contain precise GPS, audio, transcripts, device metadata,
+  and historical media. `PUBLIC_DEIDENTIFIED` uses relative time and excludes
+  precise GPS, audio, transcripts, reviewer notes, and device identity.
 - Disable battery optimization for reliable long recordings.
 - The field screen uses one static study session ID and one static corridor ID;
   neither needs to be entered before a trip.
