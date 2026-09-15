@@ -364,7 +364,8 @@ class TripDetailActivity : AppCompatActivity() {
     }
 
     private fun showRouteMap() {
-        RouteMapDialogFragment.show(this, tripId, worldAccelData, worldGyroData)
+        releaseAudioPlayer()
+        RouteMapDialogFragment.show(this, tripId, tripStart, worldAccelData, worldGyroData)
     }
 
     private fun setupAudioControls() {

@@ -3,6 +3,7 @@
 build/
 /app/build/
 /local.properties
+/local.properties.docker
 
 # Android Studio
 .idea/
