@@ -36,7 +36,13 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `open and insert trip`() = runTest {
+    fun causeTaxonomyUpdateDoesNotBumpRoomSchema() {
+        assertEquals(9, db.openHelper.writableDatabase.version)
+        assertEquals(9, ResearchVersions.ROOM_SCHEMA_VERSION)
+    }
+
+    @Test
+    fun openAndInsertTrip() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
         assertTrue(tripId > 0)
@@ -48,7 +54,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `trip context persists and post-trip correction is audited`() = runTest {
+    fun tripContextPersistsAndPostTripCorrectionIsAudited() = runTest {
         val tripId = db.tripDao().insertTrip(
             TestFixtures.tripA().copy(
                 driverId = "DRIVER_01",
@@ -83,7 +89,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `insert and verify all row types`() = runTest {
+    fun insertAndVerifyAllRowTypes() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
 
@@ -111,7 +117,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `photos insert and retrieve`() = runTest {
+    fun photosInsertAndRetrieve() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
 
@@ -132,7 +138,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `large trace insert and verify counts`() = runTest {
+    fun largeTraceInsertAndVerifyCounts() = runTest {
         val trip = TestFixtures.largeTrip()
         val tripId = db.tripDao().insertTrip(trip)
 
@@ -144,7 +150,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `two overlapping trips can coexist`() = runTest {
+    fun twoOverlappingTripsCanCoexist() = runTest {
         val trip1 = TestFixtures.tripA()
         val trip2 = TestFixtures.tripB()
 
@@ -166,7 +172,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `repeated identical research metadata remains independent`() = runTest {
+    fun repeatedIdenticalResearchMetadataRemainsIndependent() = runTest {
         val trips = (1..3).map {
             TestFixtures.tripA().copy(
                 tripUuid = "trip-$it",
@@ -189,7 +195,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `annotation revisions preserve earlier values`() = runTest {
+    fun annotationRevisionsPreserveEarlierValues() = runTest {
         val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
         val eventId = "event-1"
         db.tripDao().insertEvents(listOf(TripEvent(eventId = eventId, tripId = tripId, markerTimeMs = TestFixtures.BASE_TIME_MS)))
@@ -217,7 +223,244 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `legacy trip zero rows do not contaminate normal trip queries`() = runTest {
+    fun reviewRevisionsPreserveCapturedCauseVersionAndDistinguishResidualMeanings() = runTest {
+        val v3TripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                codebookVersion = "3",
+                causeConfigJson = """{"version":"3"}"""
+            )
+        )
+        val v3Event = TripEvent(
+            eventId = "versioned-turning-v3",
+            tripId = v3TripId,
+            markerTimeMs = TestFixtures.BASE_TIME_MS,
+            provisionalCauseCode = "TURNING",
+            primaryCauseCode = "TURNING",
+            transcript = "log turning",
+            recognitionConfidence = 0.91f,
+            codebookVersion = "3"
+        )
+        db.tripDao().insertEvents(listOf(v3Event))
+
+        db.tripDao().annotateEvent(
+            v3Event.eventId,
+            EventAnnotation(
+                primaryCauseCode = "TURNING",
+                confidenceCode = null,
+                trafficState = null,
+                codebookVersion = "3"
+            )
+        )
+        db.tripDao().annotateEvent(
+            v3Event.eventId,
+            EventAnnotation(
+                primaryCauseCode = "TURNING",
+                confidenceCode = null,
+                trafficState = null,
+                codebookVersion = "4"
+            )
+        )
+
+        val reviewed = db.tripDao().getTripEvent(v3Event.eventId)!!
+        val revisions = db.tripDao().getAnnotationsForEvent(v3Event.eventId)
+        assertEquals("3", reviewed.codebookVersion)
+        assertEquals("TURNING", reviewed.provisionalCauseCode)
+        assertEquals("log turning", reviewed.transcript)
+        assertEquals(TestFixtures.BASE_TIME_MS, reviewed.markerTimeMs)
+        assertEquals(0.91f, reviewed.recognitionConfidence!!, 0.001f)
+        assertEquals("TURNING", reviewed.primaryCauseCode)
+        assertEquals(listOf("3", "4"), revisions.map { it.codebookVersion })
+
+        val v4TripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                codebookVersion = "4",
+                causeConfigJson = """{"version":"4"}"""
+            )
+        )
+        val v4Event = TripEvent(
+            eventId = "versioned-turning-v4",
+            tripId = v4TripId,
+            markerTimeMs = TestFixtures.BASE_TIME_MS,
+            provisionalCauseCode = "TURNING",
+            primaryCauseCode = "TURNING",
+            codebookVersion = "4"
+        )
+        db.tripDao().insertEvents(listOf(v4Event))
+        try {
+            db.tripDao().annotateEvent(
+                v4Event.eventId,
+                EventAnnotation(
+                    primaryCauseCode = "TURNING",
+                    confidenceCode = null,
+                    trafficState = null,
+                    codebookVersion = "3"
+                )
+            )
+            fail("v4 trip accepted a v3 interpretation")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("v4 trip"))
+        }
+        assertTrue(db.tripDao().getAnnotationsForEvent(v4Event.eventId).isEmpty())
+    }
+
+    @Test
+    fun mixedVersionExportsPreserveCausesAndProvisionalAndReviewedTaxonomyVersions() = runTest {
+        val v3TripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                codebookVersion = "3",
+                causeConfigJson = """{"version":"3"}""",
+                causeBreakdown = """{"TURNING":1}"""
+            )
+        )
+        val v4TripId = db.tripDao().insertTrip(
+            TestFixtures.tripB().copy(
+                codebookVersion = "4",
+                causeConfigJson = """{"version":"4"}""",
+                causeBreakdown = """{"SPEED_BREAKER":1}"""
+            )
+        )
+        val unknownVersionTripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                codebookVersion = null,
+                causeConfigJson = null,
+                causeBreakdown = """{"UNKNOWN":1}"""
+            )
+        )
+        val turningEvent = TripEvent(
+            eventId = "export-turning-v3",
+            tripId = v3TripId,
+            markerTimeMs = TestFixtures.BASE_TIME_MS,
+            provisionalCauseCode = "TURNING",
+            primaryCauseCode = "TURNING",
+            transcript = "log turning",
+            codebookVersion = "3"
+        )
+        val speedBreakerEvent = TripEvent(
+            eventId = "export-speed-breaker-v4",
+            tripId = v4TripId,
+            markerTimeMs = TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS / 2,
+            provisionalCauseCode = "SPEED_BREAKER",
+            primaryCauseCode = "SPEED_BREAKER",
+            transcript = "log speed breaker",
+            codebookVersion = "4"
+        )
+        val unknownVersionEvent = TripEvent(
+            eventId = "export-unknown-version",
+            tripId = unknownVersionTripId,
+            markerTimeMs = TestFixtures.BASE_TIME_MS,
+            provisionalCauseCode = "UNKNOWN",
+            primaryCauseCode = "UNKNOWN",
+            codebookVersion = null
+        )
+        db.tripDao().insertEvents(listOf(turningEvent, speedBreakerEvent, unknownVersionEvent))
+        db.tripDao().annotateEvent(
+            turningEvent.eventId,
+            EventAnnotation(
+                primaryCauseCode = "TURNING",
+                confidenceCode = null,
+                trafficState = null,
+                codebookVersion = "3"
+            )
+        )
+        db.tripDao().annotateEvent(
+            turningEvent.eventId,
+            EventAnnotation(
+                primaryCauseCode = "TURNING",
+                confidenceCode = null,
+                trafficState = null,
+                codebookVersion = "4"
+            )
+        )
+        db.tripDao().insertAll(
+            listOf(
+                TripData(
+                    tripId = v4TripId,
+                    timestamp = TestFixtures.BASE_TIME_MS + TestFixtures.HOUR_MS / 2,
+                    eventCause = "SPEED_BREAKER",
+                    sourceType = "EVENT"
+                )
+            )
+        )
+        val selectedTrips = listOf(
+            db.tripDao().getTripById(v3TripId)!!,
+            db.tripDao().getTripById(v4TripId)!!,
+            db.tripDao().getTripById(unknownVersionTripId)!!
+        )
+
+        val restrictedArchive = File(photoDir, "mixed-codebook-restricted.zip")
+        val restrictedResult = ResearchExporter.writeArchive(
+            db, selectedTrips, restrictedArchive, "test-device", ResearchExportMode.RESTRICTED_RAW
+        )
+        ResearchExporter.validateArchive(restrictedArchive, restrictedResult)
+        ZipFile(restrictedArchive).use { zip ->
+            val events = zip.getInputStream(zip.getEntry("events/events.csv")).bufferedReader().use { it.readText() }
+            val sensors = zip.getInputStream(zip.getEntry("sensors/trip_${v4TripId}.csv"))
+                .bufferedReader().use { it.readText() }
+            val manifest = org.json.JSONObject(
+                zip.getInputStream(zip.getEntry("manifest.json")).bufferedReader().use { it.readText() }
+            )
+            val codebook = org.json.JSONObject(
+                zip.getInputStream(zip.getEntry("metadata/codebook.json")).bufferedReader().use { it.readText() }
+            )
+            val unknownConfigPath = "metadata/cause_config/trip_${selectedTrips[2].tripUuid}.json"
+            val unknownConfig = zip.getInputStream(zip.getEntry(unknownConfigPath))
+                .bufferedReader().use { it.readText() }
+            val codebooks = codebook.getJSONArray("version_specific_codebooks")
+            val v3 = (0 until codebooks.length()).map { codebooks.getJSONObject(it) }
+                .single { it.getString("version") == "3" }
+            val v4 = (0 until codebooks.length()).map { codebooks.getJSONObject(it) }
+                .single { it.getString("version") == "4" }
+            assertTrue(events.contains("provisional_codebook_version,primary_codebook_version"))
+            assertEquals("5", manifest.getString("export_format_version"))
+            assertTrue(events.contains("log turning"))
+            assertTrue(events.contains("log speed breaker"))
+            assertTrue(events.contains("export-unknown-version"))
+            assertEquals("{}", unknownConfig)
+            assertTrue(events.contains("\"3\",\"3\",\"4\""))
+            assertTrue(
+                events.lineSequence().single { it.startsWith("\"export-unknown-version\"") }
+                    .endsWith(",\"\",\"\",\"\",\"\"")
+            )
+            assertTrue(sensors.contains("\"SPEED_BREAKER\""))
+            assertTrue(v3.getJSONArray("primary_codes").toString().contains("TURNING"))
+            assertFalse(v3.getJSONArray("primary_codes").toString().contains("SPEED_BREAKER"))
+            assertTrue(v3.getJSONObject("definitions").getString("TURNING").contains("u turn"))
+            assertTrue(v3.getJSONObject("definitions").getString("FRICTION").contains("parked car"))
+            assertTrue(v4.getJSONArray("primary_codes").toString().contains("SPEED_BREAKER"))
+            assertTrue(v4.getJSONObject("definitions").getString("TURNING").contains("planned turn"))
+            assertEquals(
+                setOf("3", "4"),
+                (0 until manifest.getJSONArray("codebook_versions_present").length())
+                    .map { manifest.getJSONArray("codebook_versions_present").getString(it) }.toSet()
+            )
+        }
+
+        val publicArchive = File(photoDir, "mixed-codebook-public.zip")
+        val publicResult = ResearchExporter.writeArchive(
+            db, selectedTrips, publicArchive, "", ResearchExportMode.PUBLIC_DEIDENTIFIED
+        )
+        ResearchExporter.validateArchive(publicArchive, publicResult)
+        ZipFile(publicArchive).use { zip ->
+            val events = zip.getInputStream(zip.getEntry("events/events.csv")).bufferedReader().use { it.readText() }
+            val sensors = zip.getInputStream(zip.getEntry("sensors/trip_${selectedTrips[1].tripUuid}.csv"))
+                .bufferedReader().use { it.readText() }
+            val annotations = zip.getInputStream(zip.getEntry("events/annotations.csv"))
+                .bufferedReader().use { it.readText() }
+            assertTrue(events.contains("\"SPEED_BREAKER\""))
+            assertTrue(events.contains("\"3\",\"3\",\"4\""))
+            assertTrue(
+                events.lineSequence().single { it.startsWith("\"export-unknown-version\"") }
+                    .endsWith(",\"\",\"\"")
+            )
+            assertTrue(sensors.contains("\"SPEED_BREAKER\""))
+            assertTrue(annotations.contains("\"TURNING\""))
+            assertFalse(events.contains("log speed breaker"))
+            assertFalse(events.contains("transcript"))
+        }
+    }
+
+    @Test
+    fun legacyTripZeroRowsDoNotContaminateNormalTripQueries() = runTest {
         val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
         db.tripDao().insertAll(
             listOf(
@@ -250,7 +493,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `completed trips appear in history`() = runTest {
+    fun completedTripsAppearInHistory() = runTest {
         db.tripDao().insertTrip(TestFixtures.tripA())
         db.tripDao().insertTrip(TestFixtures.tripB())
 
@@ -261,7 +504,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `draft trip excluded from history`() = runTest {
+    fun draftTripExcludedFromHistory() = runTest {
         val draft = Trip(
             startTimeMs = TestFixtures.BASE_TIME_MS,
             endTimeMs = 0,
@@ -280,7 +523,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `draft trip visible by ID even when excluded from history`() = runTest {
+    fun draftTripVisibleByIdEvenWhenExcludedFromHistory() = runTest {
         val draft = Trip(
             startTimeMs = TestFixtures.BASE_TIME_MS,
             endTimeMs = 0,
@@ -299,7 +542,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `finalize trip marks completed and writes summary fields`() = runTest {
+    fun finalizeTripMarksCompletedAndWritesSummaryFields() = runTest {
         val draft = Trip(
             startTimeMs = TestFixtures.BASE_TIME_MS,
             endTimeMs = 0,
@@ -341,7 +584,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `unfinished drafts are preserved for recovery`() = runTest {
+    fun unfinishedDraftsArePreservedForRecovery() = runTest {
         val draft1 = Trip(
             startTimeMs = TestFixtures.BASE_TIME_MS,
             endTimeMs = 0,
@@ -381,7 +624,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `deleting one overlapping trip preserves the other`() = runTest {
+    fun deletingOneOverlappingTripPreservesTheOther() = runTest {
         val trip1 = TestFixtures.tripA()
         val trip2 = TestFixtures.tripB()
 
@@ -409,7 +652,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `deleteTripDataForTrip removes only that trips data`() = runTest {
+    fun deleteTripDataForTripRemovesOnlyThatTripsData() = runTest {
         val id1 = db.tripDao().insertTrip(TestFixtures.tripA())
         val id2 = db.tripDao().insertTrip(TestFixtures.tripB())
 
@@ -423,7 +666,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `deleteTripWithMediaFiles removes database rows and media files`() = runTest {
+    fun deleteTripWithMediaFilesRemovesDatabaseRowsAndMediaFiles() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
         val photoFile = File(photoDir, "purge-photo.jpg").apply { writeBytes(TestFixtures.generateJpegBytes()) }
@@ -451,7 +694,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `deleteTripWithMediaFiles reports missing media`() = runTest {
+    fun deleteTripWithMediaFilesReportsMissingMedia() = runTest {
         val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
         db.tripDao().insertPhoto(
             TripPhoto(
@@ -470,7 +713,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `archival audio failure metadata and audit evidence persist`() = runTest {
+    fun archivalAudioFailureMetadataAndAuditEvidencePersist() = runTest {
         val tripId = db.tripDao().insertTrip(TestFixtures.tripA())
         val audio = TripAudio(
             audioId = "audio-frame-failure",
@@ -515,7 +758,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `research archive retains archival audio failure evidence`() = runTest {
+    fun researchArchiveRetainsArchivalAudioFailureEvidence() = runTest {
         val trip = TestFixtures.tripA()
         val tripId = db.tripDao().insertTrip(trip)
         val persistedTrip = db.tripDao().getTripById(tripId)!!
@@ -558,6 +801,17 @@ class DatabaseSmokeTest {
             assertTrue(audioIndex.contains("FRAME_PROCESSING_FAILURE"))
             assertTrue(audioIndex.contains(TripAudioCompleteness.MISSING_EXPECTED_AUDIO_FILE))
             assertTrue(audioIndex.contains("\"false\",\"false\""))
+            assertTrue(
+                audioIndex.lines().any {
+                    it.startsWith("\"audio-export-failure\",") && it.endsWith(",\"\"")
+                }
+            )
+            assertNull(
+                zip.getEntry(
+                    "audio/trip_${persistedTrip.id}_" +
+                        "${ResearchClock.tripStartDateForAudioFolder(persistedTrip.startTimeMs, persistedTrip.timeZoneId)}/audio-export-failure.m4a"
+                )
+            )
             assertTrue(quality.contains("audioFailureCount"))
             assertTrue(audit.contains("AUDIO_FAILURE"))
             assertTrue(audit.contains("FRAME_PROCESSING_FAILURE"))
@@ -565,7 +819,75 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `recoverable trip has incomplete quality evidence and interruption warning`() = runTest {
+    fun restrictedArchiveGroupsAudioByTripWhileSharingOneIndex() = runTest {
+        val tripStartTimeMs = 1_704_153_600_000L
+        val firstTripId = db.tripDao().insertTrip(
+            TestFixtures.tripA().copy(
+                startTimeMs = tripStartTimeMs,
+                endTimeMs = tripStartTimeMs + 60_000L,
+                timeZoneId = "UTC"
+            )
+        )
+        val secondTripId = db.tripDao().insertTrip(
+            TestFixtures.tripB().copy(
+                startTimeMs = tripStartTimeMs + 60_000L,
+                endTimeMs = tripStartTimeMs + 120_000L,
+                timeZoneId = "UTC"
+            )
+        )
+        val firstTrip = db.tripDao().getTripById(firstTripId)!!
+        val secondTrip = db.tripDao().getTripById(secondTripId)!!
+        val firstAudioFile = File(photoDir, "first-trip.m4a").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val secondAudioFile = File(photoDir, "second-trip.m4a").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val firstAudio = TripAudio(
+            audioId = "audio-first-trip",
+            tripId = firstTripId,
+            startTimeMs = tripStartTimeMs,
+            filePath = firstAudioFile.absolutePath
+        )
+        val secondAudio = TripAudio(
+            audioId = "audio-second-trip",
+            tripId = secondTripId,
+            startTimeMs = tripStartTimeMs + 60_000L,
+            filePath = secondAudioFile.absolutePath
+        )
+        db.tripDao().insertAudio(firstAudio)
+        db.tripDao().insertAudio(secondAudio)
+
+        val archive = File(photoDir, "grouped-audio-export.zip")
+        val result = ResearchExporter.writeArchive(
+            database = db,
+            trips = listOf(firstTrip, secondTrip),
+            output = archive,
+            deviceId = "test-device",
+            mode = ResearchExportMode.RESTRICTED_RAW
+        )
+        ResearchExporter.validateArchive(archive, result)
+
+        val firstPath = ResearchExporter.audioArchivePath(firstTrip, firstAudio)
+        val secondPath = ResearchExporter.audioArchivePath(secondTrip, secondAudio)
+        assertEquals(
+            ResearchClock.tripStartDateForAudioFolder(firstTrip.startTimeMs, firstTrip.timeZoneId),
+            ResearchClock.tripStartDateForAudioFolder(secondTrip.startTimeMs, secondTrip.timeZoneId)
+        )
+        assertNotEquals(firstPath, secondPath)
+        ZipFile(archive).use { zip ->
+            val audioIndex = zip.getInputStream(zip.getEntry("audio/audio_index.csv"))
+                .bufferedReader()
+                .use { it.readText() }
+            val manifest = zip.getInputStream(zip.getEntry("manifest.json"))
+                .bufferedReader()
+                .use { org.json.JSONObject(it.readText()) }
+            assertEquals(ResearchVersions.EXPORT_FORMAT_VERSION, manifest.getString("export_format_version"))
+            assertTrue(audioIndex.contains("\"$firstPath\""))
+            assertTrue(audioIndex.contains("\"$secondPath\""))
+            assertArrayEquals(byteArrayOf(1, 2, 3), zip.getInputStream(zip.getEntry(firstPath)).use { it.readBytes() })
+            assertArrayEquals(byteArrayOf(4, 5, 6), zip.getInputStream(zip.getEntry(secondPath)).use { it.readBytes() })
+        }
+    }
+
+    @Test
+    fun recoverableTripHasIncompleteQualityEvidenceAndInterruptionWarning() = runTest {
         val trip = TestFixtures.tripA().copy(status = TripStatus.RECORDING)
         val tripId = db.tripDao().insertTrip(trip)
         db.tripDao().markTripInterrupted(
@@ -594,7 +916,7 @@ class DatabaseSmokeTest {
     }
 
     @Test
-    fun `preparation timeout is preserved in trip and restricted export`() = runTest {
+    fun preparationTimeoutIsPreservedInTripAndRestrictedExport() = runTest {
         val draft = TestFixtures.tripA().copy(
             status = TripStatus.RECORDING,
             driverId = "DRIVER_01",
