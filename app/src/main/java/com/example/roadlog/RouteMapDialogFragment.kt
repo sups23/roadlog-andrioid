@@ -68,6 +68,8 @@ class RouteMapDialogFragment : DialogFragment() {
     private var geoPoints: List<GeoPoint> = emptyList()
     private var gpsData: List<TripData> = emptyList()
     private var events: List<TripEvent> = emptyList()
+    private var trip: Trip? = null
+    private var latestAnnotationsByEvent: Map<String, EventAnnotationRevision> = emptyMap()
     private var worldAccel: List<WorldAccelSample> = emptyList()
     private var worldGyro: List<WorldGyroSample> = emptyList()
     private var tripStartMs = 0L
@@ -400,14 +402,22 @@ class RouteMapDialogFragment : DialogFragment() {
         val tripId = requireArguments().getLong(ARG_TRIP_ID)
         tripStartMs = requireArguments().getLong(ARG_TRIP_START_MS)
         lifecycleScope.launch {
+            val dao = AppDatabase.getDatabase(requireContext()).tripDao()
             gpsData = withContext(Dispatchers.IO) {
-                AppDatabase.getDatabase(requireContext()).tripDao().getGpsForMap(tripId)
+                dao.getGpsForMap(tripId)
             }
             events = withContext(Dispatchers.IO) {
-                AppDatabase.getDatabase(requireContext()).tripDao().getTripEvents(tripId)
+                dao.getTripEvents(tripId)
+            }
+            trip = withContext(Dispatchers.IO) { dao.getTripById(tripId) }
+            latestAnnotationsByEvent = withContext(Dispatchers.IO) {
+                dao.getAnnotationsForTrip(tripId).groupBy { it.eventId }
+                    .mapNotNull { (eventId, revisions) ->
+                        revisions.maxByOrNull { it.annotationVersion }?.let { eventId to it }
+                    }.toMap()
             }
             audioSegments = withContext(Dispatchers.IO) {
-                AppDatabase.getDatabase(requireContext()).tripDao().getAudioForTrip(tripId)
+                dao.getAudioForTrip(tripId)
             }
             geoPoints = gpsData.map { GeoPoint(it.latitude!!, it.longitude!!) }
             if (geoPoints.isEmpty()) {
@@ -742,7 +752,7 @@ class RouteMapDialogFragment : DialogFragment() {
         highlightedEventId = event.eventId
         highlightedEventUntilMs = event.markerTimeMs + EVENT_HIGHLIGHT_DURATION_MS
         val eventIndex = events.indexOfFirst { it.eventId == event.eventId } + 1
-        val cause = event.primaryCauseCode ?: event.provisionalCauseCode ?: "UNANNOTATED"
+        val cause = displayEventCause(event)
         playbackEventText.text = "Event $eventIndex: $cause at ${formatTripElapsed(event.markerTimeMs)}"
         playbackEventText.visibility = View.VISIBLE
         refreshEventMarkerStyles()
@@ -756,6 +766,30 @@ class RouteMapDialogFragment : DialogFragment() {
         playbackEventText.text = ""
         playbackEventText.visibility = View.GONE
         refreshEventMarkerStyles()
+    }
+
+    private fun displayEventCause(event: TripEvent): String {
+        val revision = latestAnnotationsByEvent[event.eventId]
+        val code = revision?.primaryCauseCode ?: event.primaryCauseCode ?: event.provisionalCauseCode
+            ?: return "UNANNOTATED"
+        val sourceTrip = trip
+        val configVersion = sourceTrip?.causeConfigJson?.let { raw ->
+            runCatching {
+                org.json.JSONObject(raw).optString("version").takeIf { it.isNotBlank() }
+            }.getOrNull()
+        }
+        val provisionalVersion = CauseTaxonomyVersions.provisionalVersion(
+            tripVersion = sourceTrip?.codebookVersion,
+            configVersion = configVersion,
+            eventVersion = event.codebookVersion,
+            hasAnnotationHistory = revision != null
+        )
+        val currentVersion = CauseTaxonomyVersions.currentPrimaryVersion(
+            hasAnnotation = revision != null,
+            annotationVersion = revision?.codebookVersion,
+            provisionalVersion = provisionalVersion
+        )
+        return CauseDisplay.versioned(code, currentVersion)
     }
 
     private fun seekToEvent(event: TripEvent) {
@@ -1032,7 +1066,7 @@ class RouteMapDialogFragment : DialogFragment() {
         events.forEachIndexed { index, event ->
             val location = EventMapLocationResolver.resolve(event, gpsData) ?: return@forEachIndexed
             val point = GeoPoint(location.latitude, location.longitude)
-            val cause = event.primaryCauseCode ?: event.provisionalCauseCode ?: "UNANNOTATED"
+            val cause = displayEventCause(event)
             val source = when (location.source) {
                 EventMapLocationSource.RECORDED -> "recorded location"
                 EventMapLocationSource.NEAREST_GPS -> "nearest GPS point"
@@ -1128,6 +1162,7 @@ class RouteMapDialogFragment : DialogFragment() {
     }
 
     override fun onResume() {
+
         super.onResume()
         mapView.onResume()
     }

@@ -85,7 +85,12 @@ class TripAdapter(
                 val keys = json.keys().asSequence().toList()
                 if (keys.isEmpty()) return "No causes recorded"
                 keys.joinToString(" · ") { key ->
-                    "$key×${json.getInt(key)}"
+                    val versionNote = if (key in ResearchCodebook.v4ResidualCodes) {
+                        " (see event versions)"
+                    } else {
+                        ""
+                    }
+                    "${CauseDisplay.name(key)}$versionNote×${json.getInt(key)}"
                 }
             } catch (e: Exception) {
                 "No causes recorded"

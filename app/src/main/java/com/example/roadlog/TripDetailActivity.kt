@@ -274,6 +274,9 @@ class TripDetailActivity : AppCompatActivity() {
                 }
                 gpsRouteData = gpsData
                 val events = withContext(Dispatchers.IO) { database.tripDao().getTripEvents(tripId) }
+                val annotations = withContext(Dispatchers.IO) {
+                    database.tripDao().getAnnotationsForTrip(tripId)
+                }
                 val accelData = withContext(Dispatchers.IO) {
                     database.tripDao().getAccelForTripCapped(tripId, tripStart, tripEnd, VISUAL_SENSOR_LIMIT)
                 }
@@ -311,8 +314,8 @@ class TripDetailActivity : AppCompatActivity() {
 
                 setStatus("Preparing charts...")
                 bindHeader(trip, gpsData, quality, auditRevisions)
-                bindBreakdown(trip.causeBreakdown)
-                bindTimeline(events, trip.startTimeMs)
+                bindBreakdown(trip.causeBreakdown, events, annotations, trip)
+                bindTimeline(events, annotations, trip)
                 bindSpeedChart(gpsData)
                 bindRoughnessChart(worldAccel)
                 bindLateralChart(worldAccel)
@@ -909,7 +912,12 @@ class TripDetailActivity : AppCompatActivity() {
         }
     }
 
-    private fun bindBreakdown(causeBreakdown: String) {
+    private fun bindBreakdown(
+        causeBreakdown: String,
+        events: List<TripEvent>,
+        annotations: List<EventAnnotationRevision>,
+        trip: Trip
+    ) {
         Log.d(TAG, "bindBreakdown: $causeBreakdown")
         breakdownContainer.removeAllViews()
         try {
@@ -919,11 +927,39 @@ class TripDetailActivity : AppCompatActivity() {
                 addBreakdownChip("No causes recorded", false)
                 return
             }
+            val latestAnnotations = annotations.groupBy { it.eventId }
+                .mapValues { (_, revisions) -> revisions.maxByOrNull { it.annotationVersion } }
+            val versionsByCause = events.mapNotNull { event ->
+                val revision = latestAnnotations[event.eventId]
+                val code = revision?.primaryCauseCode ?: event.primaryCauseCode
+                code?.let {
+                    it to CauseTaxonomyVersions.currentPrimaryVersion(
+                        hasAnnotation = revision != null,
+                        annotationVersion = revision?.codebookVersion,
+                        provisionalVersion = provisionalVersion(trip, event, hasAnnotationHistory = revision != null)
+                    )
+                }
+            }.groupBy({ it.first }, { it.second })
             keys.forEach { cause ->
-                addBreakdownChip("${displayCause(cause)} ×${json.getInt(cause)}", true)
+                val versionLabel = if (cause == "TURNING" || cause == "FRICTION") {
+                    " (${residualBreakdownVersionLabel(versionsByCause[cause].orEmpty())})"
+                } else {
+                    ""
+                }
+                addBreakdownChip("${CauseDisplay.name(cause)}$versionLabel ×${json.getInt(cause)}", true)
             }
         } catch (e: Exception) {
             addBreakdownChip("No causes recorded", false)
+        }
+    }
+
+    private fun residualBreakdownVersionLabel(versions: List<String?>): String {
+        val knownVersions = versions.filterNotNull().distinct()
+        return when {
+            knownVersions.size > 1 -> "mixed v3/v4"
+            versions.any { it == null } -> "version uncertain"
+            knownVersions.singleOrNull() != null -> CauseDisplay.residualVersion(knownVersions.single())
+            else -> "version uncertain"
         }
     }
 
@@ -949,7 +985,11 @@ class TripDetailActivity : AppCompatActivity() {
         breakdownContainer.addView(chip)
     }
 
-    private fun bindTimeline(events: List<TripEvent>, tripStartMs: Long) {
+    private fun bindTimeline(
+        events: List<TripEvent>,
+        annotations: List<EventAnnotationRevision>,
+        trip: Trip
+    ) {
         Log.d(TAG, "bindTimeline: events=${events.size}")
         timelineContainer.removeAllViews()
         if (events.isEmpty()) {
@@ -962,16 +1002,30 @@ class TripDetailActivity : AppCompatActivity() {
             return
         }
 
+        val latestAnnotations = annotations.groupBy { it.eventId }
+            .mapValues { (_, revisions) -> revisions.maxByOrNull { it.annotationVersion } }
         events.forEach { event ->
-            val elapsedMs = event.markerTimeMs - tripStartMs
+            val elapsedMs = event.markerTimeMs - trip.startTimeMs
             val elapsedSeconds = TimeUnit.MILLISECONDS.toSeconds(elapsedMs)
             val minutes = elapsedSeconds / 60
             val seconds = elapsedSeconds % 60
             val timeText = String.format("%02d:%02d", minutes, seconds)
 
             val row = TextView(this).apply {
-                val cause = event.primaryCauseCode?.let(::displayCause) ?: "UNANNOTATED"
-                val provisional = event.provisionalCauseCode?.let { " · provisional ${displayCause(it)}" }.orEmpty()
+                val revision = latestAnnotations[event.eventId]
+                val provisionalVersion = provisionalVersion(
+                    trip, event, hasAnnotationHistory = revision != null
+                )
+                val currentCause = revision?.primaryCauseCode ?: event.primaryCauseCode
+                val currentVersion = CauseTaxonomyVersions.currentPrimaryVersion(
+                    hasAnnotation = revision != null,
+                    annotationVersion = revision?.codebookVersion,
+                    provisionalVersion = provisionalVersion
+                )
+                val cause = currentCause?.let { CauseDisplay.versioned(it, currentVersion) } ?: "UNANNOTATED"
+                val provisional = event.provisionalCauseCode?.let {
+                    " · provisional ${CauseDisplay.versioned(it, provisionalVersion)}"
+                }.orEmpty()
                 text = "$timeText · $cause$provisional · ${event.status} · ${event.provenance}"
                 textSize = 15f
                 setPadding(0, 8, 0, 8)
@@ -981,22 +1035,46 @@ class TripDetailActivity : AppCompatActivity() {
         }
     }
 
-    private fun displayCause(code: String): String = when (code) {
-        ResearchCodebook.UNKNOWN_CODE -> "UNKNOWN"
-        else -> code
+    private fun provisionalVersion(
+        trip: Trip,
+        event: TripEvent,
+        hasAnnotationHistory: Boolean = false
+    ): String? {
+        return CauseTaxonomyVersions.provisionalVersion(
+            tripVersion = trip.codebookVersion,
+            configVersion = tripConfigVersion(trip),
+            eventVersion = event.codebookVersion,
+            hasAnnotationHistory = hasAnnotationHistory
+        )
+    }
+
+    private fun tripConfigVersion(trip: Trip): String? = trip.causeConfigJson?.let { raw ->
+        runCatching {
+            org.json.JSONObject(raw).optString("version").takeIf { it.isNotBlank() }
+        }.getOrNull()
     }
 
     private fun showAnnotationDialog(event: TripEvent) {
         scope.launch {
-            val existing = withContext(Dispatchers.IO) {
-                database.tripDao().getAnnotationsForEvent(event.eventId).lastOrNull()
+            val annotationAndTrip = withContext(Dispatchers.IO) {
+                database.tripDao().getAnnotationsForEvent(event.eventId).lastOrNull() to
+                    database.tripDao().getTripById(event.tripId)
             }
             ensureActive()
-            showAnnotationDialog(event, existing)
+            val trip = annotationAndTrip.second
+            if (trip == null) {
+                Toast.makeText(this@TripDetailActivity, "Trip is unavailable", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            showAnnotationDialog(event, trip, annotationAndTrip.first)
         }
     }
 
-    private fun showAnnotationDialog(event: TripEvent, existing: EventAnnotationRevision?) {
+    private fun showAnnotationDialog(
+        event: TripEvent,
+        trip: Trip,
+        existing: EventAnnotationRevision?
+    ) {
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 8, 32, 0)
@@ -1016,9 +1094,23 @@ class TripDetailActivity : AppCompatActivity() {
             })
         }
 
-        val causes = ResearchCodebook.primaryCodes.toList().sorted()
-        label("Primary cause")
-        val primary = spinner(causes)
+        val captureVersion = provisionalVersion(trip, event, hasAnnotationHistory = existing != null)
+        val choices = CauseReviewChoices.forVersions(
+            captureVersion,
+            existing?.codebookVersion
+        )
+        label("Primary cause and codebook version")
+        if (captureVersion == null) {
+            label("Original cause version is uncertain. Choose the applicable interpretation; this review does not change capture provenance.")
+        }
+        val primary = Spinner(this).also { view ->
+            view.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_item,
+                choices
+            ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            form.addView(view)
+        }
         label("Traffic state")
         val traffic = spinner(listOf("Unspecified") + ResearchCodebook.trafficStates.toList().sorted())
         label("Confidence")
@@ -1048,8 +1140,15 @@ class TripDetailActivity : AppCompatActivity() {
         }
         form.addView(sourceLongitude)
 
-        val existingPrimary = (existing?.primaryCauseCode ?: event.primaryCauseCode)?.let { causes.indexOf(it) } ?: 0
-        primary.setSelection(existingPrimary.coerceAtLeast(0))
+        val selectedCode = existing?.primaryCauseCode ?: event.primaryCauseCode ?: event.provisionalCauseCode
+        val selectedVersion = existing?.codebookVersion ?: captureVersion ?: ResearchCodebook.VERSION
+        val selectedChoice = choices.indexOfFirst { it.code == selectedCode && it.codebookVersion == selectedVersion }
+        val fallbackChoice = choices.indexOfFirst { it.code == selectedCode && it.codebookVersion == ResearchCodebook.VERSION }
+        primary.setSelection(when {
+            selectedChoice >= 0 -> selectedChoice
+            fallbackChoice >= 0 -> fallbackChoice
+            else -> 0
+        })
         confidence.setSelection((existing?.confidenceCode ?: event.confidenceCode ?: 0).coerceIn(0, 3))
         (existing?.trafficState ?: event.trafficState)?.let { state ->
             val index = ResearchCodebook.trafficStates.toList().sorted().indexOf(state)
@@ -1068,10 +1167,11 @@ class TripDetailActivity : AppCompatActivity() {
                             database.tripDao().annotateEvent(
                                 eventId = event.eventId,
                                 annotation = EventAnnotation(
-                                    primaryCauseCode = primary.selectedItem.toString(),
+                                    primaryCauseCode = (primary.selectedItem as CauseReviewChoice).code,
                                     confidenceCode = confidence.selectedItem.toString().toInt(),
                                     trafficState = trafficState,
-                                    notes = notes.text.toString().trim().takeIf { it.isNotEmpty() }
+                                    notes = notes.text.toString().trim().takeIf { it.isNotEmpty() },
+                                    codebookVersion = (primary.selectedItem as CauseReviewChoice).codebookVersion
                                 )
                             )
                             database.tripDao().updateEventSourceLocationWithAudit(
