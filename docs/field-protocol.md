@@ -14,14 +14,43 @@
 - The driver starts and stops the app while parked, then operates no controls while moving.
 - Keep the foreground-service notification active.
 - Speak one hands-free command at the observed slowdown: `log [CAUSE]`.
-- Valid examples include `log signal`, `log queue`, `log bus`, `log pedestrian`,
-  `log roughness`, `log construction`, `log friction`, `log turning`,
-  `log market`, and `log unknown`.
-- `UNKNOWN` is valid when the cause cannot be classified. Unmatched,
-  low-confidence, and ambiguous commands create no event.
-- Each accepted command creates one event; repeated commands are not deduplicated.
+- v4 examples include `log signal`, `log queue`, `log bus`, `log pedestrian`,
+  `log roughness`, `log construction`, `log market`, `log unknown`,
+  `log slow lead` (or `log slow lead vehicle`), `log merging`, `log lead turn`, `log crossing turn`,
+  `log parked bike`, `log parked car`, `log delivery stop`, and
+  `log speed breaker`. The bounded residual commands are `log other turn` and
+  `log side obstruction`.
+- Speak one cause command only. Extra cause words, multiple cause tokens,
+  unmatched phrases, and low-confidence commands are rejected. Legacy broad
+  phrases such as `log turning`, `log u turn`, `log friction`, `log parked`,
+  and `log speed bump` are not mapped to a specific v4 cause; say `log unknown`
+  when the cause cannot be classified.
+- Every accepted command creates one event with one provisional scalar cause,
+  recognized text, timestamp, and speech confidence. RoadLog does not require a
+  real-time measured speed drop before recording any cause. In particular,
+  `log speed breaker` is saved regardless of GPS speed; it does not itself
+  validate a study slowdown episode. Do not treat ordinary manoeuvring as a
+  validated speed-breaker event.
+- `UNKNOWN` is valid when the cause cannot be classified. Repeated accepted
+  commands are not deduplicated.
 - GPS and motion sensors provide context only. Vibration, weather, congestion,
   personal stops, and route/app failures are not automatic cause detections.
+- `QUEUE` describes general dense or stationary downstream traffic; a single
+  constrained lead vehicle is `SLOW_LEAD_VEHICLE`, not automatically a queue.
+  `ROUGH` concerns surface defects, not speed breakers.
+- `LEAD_TURN`, `CROSSING_TURN`, and `MERGING` describe another vehicle's
+  interference. The rider's own planned turn is none of these causes.
+- `DELIVERY_STOP` requires observed evidence of delivery, collection, loading,
+  or unloading; do not infer purpose from vehicle type or presence. Parked-bike
+  and parked-car labels require direct obstruction of usable road space.
+- v4 `TURNING` is the bounded residual for an impeding other-vehicle turn/U-turn
+  that does not enter the rider's path as `MERGING`, turn out of the lane ahead
+  as `LEAD_TURN`, or cross from oncoming traffic as `CROSSING_TURN`. v4
+  `FRICTION` is a directly impeding lateral obstruction that cannot be assigned
+  to a more specific cause; vehicle interactions and surface defects are
+  excluded. The rider's own turn and mere roadside presence do not qualify.
+- v3 trip labels keep their v3 meanings. Review presents each event's provisional
+  capture label separately from its current reviewed primary and codebook version.
 - Do not change direction or period after recording starts.
 - No current-trip photos are captured.
 

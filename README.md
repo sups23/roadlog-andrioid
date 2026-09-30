@@ -31,9 +31,10 @@ event annotation, and trip QA in one local-first logger.
 - Android SDK 34 for compilation.
 - Android 8.0 / API 26 or newer.
 - A device or emulator with GPS, microphone, and accelerometer support.
-- Location and microphone permissions for recording.
+- Precise location and microphone permissions for recording; approximate-only location cannot start a trip.
+- Android 13+ requests notification permission on the first recording start. Denial does not block recording, but recording controls remain available in the app rather than the notification drawer.
 
-The app targets SDK 29 and supports the `armeabi-v7a`, `arm64-v8a`, `x86`, and
+The sideload app targets SDK 34 and supports the `armeabi-v7a`, `arm64-v8a`, `x86`, and
 `x86_64` ABIs.
 
 ## Build
@@ -66,16 +67,35 @@ Install on a connected device or emulator with:
 
 Instrumentation tests require a connected device or emulator.
 
+Permission-boundary tests require a dedicated empty install with location and
+microphone permissions initially denied. The approximate-location case runs only
+on Android 12+ and leaves its test grants in place; reset/uninstall that dedicated
+install outside instrumentation before repeating those tests. Tests never revoke
+their own process permissions, which can terminate the entire test run.
+
+For target-SDK upgrades, manually verify on Android 11 and Android 14 or newer:
+precise/approximate location, denied microphone and notifications, user-initiated
+recording, screen-off/background recording, stop/recovery, and both export modes.
+Recheck installation with Play Protect enabled; targeting SDK 34 addresses the
+older-target warning, not unrelated scanner verdicts.
+
 ## Runtime Notes
 
 - Keep `app/src/main/assets/model-en-us/`; it is the bundled Vosk model.
 - Speech causes, phrases, variants, and thresholds are defined in
   `app/src/main/assets/cause_config.json`.
-- Voice cause commands require the `log` activation phrase. For example,
-  say `log roughness`, `log queue`, or `log unknown`; unrelated speech,
-  unmatched words, low-confidence results, and ambiguous commands are ignored.
-- Current canonical causes are `SIGNAL`, `QUEUE`, `BUS`, `PED`, `ROUGH`,
-  `CONSTRUCTION`, `FRICTION`, `TURNING`, `MARKET`, and `UNKNOWN`.
+- Voice cause commands require one exact `log [CAUSE]` activation, such as
+  `log slow lead vehicle`, `log parked car`, `log speed breaker`, `log other turn`, or
+  `log unknown`. Extra, ambiguous, unmatched, and low-confidence speech is not
+  accepted as an event.
+- Current codebook v4 causes are `SIGNAL`, `QUEUE`, `BUS`, `PED`, `ROUGH`,
+  `CONSTRUCTION`, `TURNING`, `FRICTION`, `MARKET`, `UNKNOWN`,
+  `SLOW_LEAD_VEHICLE`, `MERGING`, `LEAD_TURN`, `CROSSING_TURN`, `PARKED_BIKE`,
+  `PARKED_CAR`, `DELIVERY_STOP`, and `SPEED_BREAKER`. `TURNING` and `FRICTION`
+  have bounded v4 residual definitions; historical v3 meanings remain unchanged.
+- Accepted speech creates one provisional primary cause without a real-time GPS
+  speed-drop gate. `log speed breaker` is recorded provisionally; RoadLog does
+  not automatically validate the study's slowdown-episode rule.
 - The collection screen has no camera or manual-cause controls. Legacy photo rows
   remain only for historical compatibility and restricted export/purge handling.
 - `RESTRICTED_RAW` may contain precise GPS, audio, transcripts, device metadata,

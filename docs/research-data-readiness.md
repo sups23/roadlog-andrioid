@@ -40,6 +40,9 @@
 - Current collection accepts only driver-operated hands-free voice commands and
   stores one canonical primary cause plus provisional provenance. Legacy photo
   rows remain readable but no new collection path creates photos.
+- Codebook v4 cause recognition and category boundaries have not been field
+  validated. Accepted voice labels remain provisional; speed-breaker commands
+  have no automatic real-time speed gate.
 - `RESTRICTED_RAW` and `PUBLIC_DEIDENTIFIED` exports have different privacy
   contracts; public archives omit precise GPS, audio, transcripts, reviewer data,
   and device identity.
@@ -53,7 +56,7 @@
 NOT READY FOR PILOT
 ```
 
-Move to `READY FOR PILOT WITH KNOWN LIMITATIONS` only after schema 8 is generated
+Move to `READY FOR PILOT WITH KNOWN LIMITATIONS` only after schema 9 is generated
 and validated, both export modes pass count/privacy/checksum checks, and
 representative devices complete screen-lock, process-interruption, sensor,
 audio, and voice-command checks.
