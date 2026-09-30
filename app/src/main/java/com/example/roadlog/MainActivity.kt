@@ -36,6 +36,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.widget.addTextChangedListener
+import androidx.lifecycle.Lifecycle
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -50,11 +51,13 @@ class MainActivity : AppCompatActivity() {
 
     private val permissions = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
         Manifest.permission.RECORD_AUDIO
     )
 
     private val permissionRequestCode = 1001
     private val startupPermissionRequestCode = 1003
+    private val notificationPermissionRequestCode = 1004
     private val batteryOptimizationRequestCode = 1002
 
     private lateinit var startButton: Button
@@ -114,8 +117,9 @@ class MainActivity : AppCompatActivity() {
                 modelStatusText.text = "Preparation failed. The trip was preserved for recovery."
             } else if (status.startsWith("cause:")) {
                 val cause = status.removePrefix("cause:")
-                lastMatchedCause = cause
-                statusText.text = "Voice event: $cause"
+                val displayCause = CauseDisplay.name(cause)
+                lastMatchedCause = displayCause
+                statusText.text = "Voice event: $displayCause"
                 updateCauseHeardLine()
             } else {
                 statusText.text = status
@@ -550,6 +554,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStartClicked() {
         Log.d(TAG, "START button clicked")
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            Toast.makeText(this, "Open RoadLog to start recording", Toast.LENGTH_LONG).show()
+            return
+        }
         val context = currentTripContext()
         val validation = TripStartValidator.validate(
             TripStartConfiguration(
@@ -566,6 +574,25 @@ class MainActivity : AppCompatActivity() {
         if (!hasAllPermissions()) {
             ActivityCompat.requestPermissions(this, permissions, permissionRequestCode)
             return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            val preferences = getSharedPreferences("recording_permissions", MODE_PRIVATE)
+            if (!preferences.getBoolean("notifications_requested", false)) {
+                preferences.edit().putBoolean("notifications_requested", true).apply()
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    notificationPermissionRequestCode
+                )
+                return
+            }
+            Toast.makeText(
+                this,
+                "Notifications are disabled; reopen RoadLog to see recording status and stop the trip",
+                Toast.LENGTH_LONG
+            ).show()
         }
         startRecording(context)
     }
@@ -593,10 +620,16 @@ class MainActivity : AppCompatActivity() {
             putExtra(LoggerService.EXTRA_NON_TRAFFIC_STOP, context.nonTrafficStop)
             putExtra(LoggerService.EXTRA_CONTEXT_NOTE, context.contextNote)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        try {
+            ContextCompat.startForegroundService(this, intent)
+        } catch (error: SecurityException) {
+            Log.e(TAG, "Recording service permission denied", error)
+            Toast.makeText(this, "Cannot start: precise location and microphone permissions are required", Toast.LENGTH_LONG).show()
+            return
+        } catch (error: IllegalStateException) {
+            Log.e(TAG, "Recording service startup restricted", error)
+            Toast.makeText(this, "Cannot start recording now; keep RoadLog open and try again", Toast.LENGTH_LONG).show()
+            return
         }
         pendingStatusHide?.let { handler.removeCallbacks(it) }
         activeTripId = -1L
@@ -763,25 +796,26 @@ class MainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
+            notificationPermissionRequestCode -> onStartClicked()
             startupPermissionRequestCode -> {
-                if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                if (hasAllPermissions()) {
                     refreshLocationOverlay()
                     centerMapOnLastKnownLocation()
                     updatePreTripHealth()
                 } else {
                     Toast.makeText(
                         this,
-                        "Location and microphone permissions are needed for full functionality",
+                        "Precise location and microphone permissions are needed for recording",
                         Toast.LENGTH_LONG
                     ).show()
                 }
             }
             permissionRequestCode -> {
-                if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                if (hasAllPermissions()) {
                     onStartClicked()
                     updatePreTripHealth()
                 } else {
-                    Toast.makeText(this, "Permissions required to record trip", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Precise location and microphone permissions are required to record a trip", Toast.LENGTH_LONG).show()
                 }
             }
         }

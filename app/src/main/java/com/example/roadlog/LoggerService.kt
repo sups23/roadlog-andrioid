@@ -619,6 +619,13 @@ class LoggerService : Service() {
             lifecycleState = RecordingState.PREPARING
             stopRequested = false
         }
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            broadcastStatus("Cannot start: precise location and microphone permissions are required")
+            finishServiceWithoutCompletion()
+            return
+        }
         preparationFailureHandled.set(false)
         listenerStartInFlight = false
         isListening = false
@@ -663,7 +670,25 @@ class LoggerService : Service() {
         Log.i(TAG, "WakeLock acquired")
 
         // Foreground promotion happens before model loading or database work.
-        startForeground(NOTIFICATION_ID, buildNotification())
+        try {
+            androidx.core.app.ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } catch (error: SecurityException) {
+            Log.e(TAG, "Foreground recording permissions unavailable", error)
+            broadcastStatus("Cannot start: precise location and microphone permissions are required")
+            finishServiceWithoutCompletion()
+            return
+        } catch (error: IllegalStateException) {
+            Log.e(TAG, "Foreground recording startup restricted", error)
+            broadcastStatus("Cannot start recording now; reopen RoadLog and try again")
+            finishServiceWithoutCompletion()
+            return
+        }
         Log.i(TAG, "Foreground service started")
 
         startJob = serviceScope.launch {
