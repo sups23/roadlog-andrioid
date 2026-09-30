@@ -482,20 +482,22 @@ interface TripDao {
     @Query("SELECT * FROM event_annotations WHERE eventId = :eventId ORDER BY annotationVersion")
     suspend fun getAnnotationsForEvent(eventId: String): List<EventAnnotationRevision>
 
+    @Query("SELECT * FROM event_annotations WHERE eventId IN (SELECT eventId FROM trip_events WHERE tripId = :tripId) ORDER BY eventId, annotationVersion")
+    suspend fun getAnnotationsForTrip(tripId: Long): List<EventAnnotationRevision>
+
     @Query("SELECT * FROM event_annotations ORDER BY annotationTimestampMs, annotationId")
     suspend fun getAllAnnotationsForExport(): List<EventAnnotationRevision>
 
     @Query("SELECT COALESCE(MAX(annotationVersion), 0) FROM event_annotations WHERE eventId = :eventId")
     suspend fun getLatestAnnotationVersion(eventId: String): Int
 
-    @Query("UPDATE trip_events SET primaryCauseCode = :primaryCauseCode, confidenceCode = :confidenceCode, trafficState = :trafficState, status = 'ANNOTATED', notes = :notes, codebookVersion = :codebookVersion WHERE eventId = :eventId")
+    @Query("UPDATE trip_events SET primaryCauseCode = :primaryCauseCode, confidenceCode = :confidenceCode, trafficState = :trafficState, status = 'ANNOTATED', notes = :notes WHERE eventId = :eventId")
     suspend fun updateEventAnnotation(
         eventId: String,
         primaryCauseCode: String,
         confidenceCode: Int?,
         trafficState: String?,
-        notes: String?,
-        codebookVersion: String
+        notes: String?
     ): Int
 
     @Query("UPDATE trip_events SET sourceLatitude = :latitude, sourceLongitude = :longitude, sourceLocationVisible = :visible WHERE eventId = :eventId")
@@ -520,17 +522,29 @@ interface TripDao {
         }
         EventAnnotationValidator.requireValid(annotation)
         val event = getTripEvent(eventId) ?: error("event $eventId does not exist")
+        val trip = getTripById(event.tripId) ?: error("trip ${event.tripId} does not exist")
+        val previous = getAnnotationsForEvent(eventId).lastOrNull()
+        val configVersion = trip.causeConfigJson?.let { raw ->
+            runCatching { JSONObject(raw).optString("version").takeIf { it.isNotBlank() } }.getOrNull()
+        }
+        val captureVersion = CauseTaxonomyVersions.provisionalVersion(
+            tripVersion = trip.codebookVersion,
+            configVersion = configVersion,
+            eventVersion = event.codebookVersion,
+            hasAnnotationHistory = previous != null
+        )
+        require(captureVersion != ResearchCodebook.VERSION || annotation.codebookVersion == ResearchCodebook.VERSION) {
+            "a v4 trip cannot be reviewed with a v3 cause definition"
+        }
         check(
             updateEventAnnotation(
                 eventId = eventId,
                 primaryCauseCode = primaryCause,
                 confidenceCode = annotation.confidenceCode,
                 trafficState = annotation.trafficState,
-                notes = notes,
-                codebookVersion = ResearchCodebook.VERSION
+                notes = notes ?: annotation.notes
             ) == 1
         ) { "event $eventId does not exist" }
-        val previous = getAnnotationsForEvent(eventId).lastOrNull()
         val version = getLatestAnnotationVersion(eventId) + 1
         insertAnnotationRevision(
             EventAnnotationRevision(
@@ -543,7 +557,7 @@ interface TripDao {
                 trafficState = annotation.trafficState,
                 confidenceCode = annotation.confidenceCode,
                 notes = notes ?: annotation.notes,
-                codebookVersion = ResearchCodebook.VERSION,
+                codebookVersion = annotation.codebookVersion,
                 supersedesAnnotationId = previous?.annotationId
             )
         )
@@ -1404,7 +1418,7 @@ private fun SupportSQLiteDatabase.migrateLegacyEventRows() {
                     primaryCauseCode,
                     EventStatus.PENDING,
                     EventProvenance.LEGACY_IMPORTED,
-                    ResearchCodebook.VERSION,
+                    ResearchVersions.LEGACY_MIGRATED_CODEBOOK_VERSION,
                     markerTimeMs
                 )
             )

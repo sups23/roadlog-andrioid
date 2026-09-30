@@ -23,9 +23,9 @@ class DatabaseMigrationTest {
             db.execSQL(
                 """
                 INSERT INTO trips(
-                    startTimeMs,endTimeMs,distanceMeters,eventCount,gpsPointCount,
+                    id,startTimeMs,endTimeMs,startNanoTime,endNanoTime,distanceMeters,eventCount,gpsPointCount,
                     accelPointCount,causeBreakdown,createdAt,status
-                ) VALUES(1000,2000,10.0,0,1,1,'{}',1000,0)
+                ) VALUES(1,1000,2000,1000000000,2000000000,10.0,0,1,1,'{}',1000,0)
                 """.trimIndent()
             )
             db.execSQL(
@@ -42,22 +42,24 @@ class DatabaseMigrationTest {
                 ) VALUES(0,1750,27.71,85.31,4.0,'SIG',NULL)
                 """.trimIndent()
             )
+            // Sensor rows already have trip ownership; v6 -> v7 only backfills
+            // unowned GPS/event rows and classifies all existing source types.
             db.execSQL(
                 """
                 INSERT INTO trip_data(tripId,timestamp,accelZ)
-                VALUES(0,1200,9.8)
+                VALUES(1,1200,9.8)
                 """.trimIndent()
             )
             db.execSQL(
                 """
                 INSERT INTO trip_data(tripId,timestamp,gyroX)
-                VALUES(0,1300,0.1)
+                VALUES(1,1300,0.1)
                 """.trimIndent()
             )
             db.execSQL(
                 """
                 INSERT INTO trip_data(tripId,timestamp,rotW)
-                VALUES(0,1400,1.0)
+                VALUES(1,1400,1.0)
                 """.trimIndent()
             )
         }
@@ -80,12 +82,13 @@ class DatabaseMigrationTest {
                 check(cursor.getInt(0) == 5)
             }
             db.query(
-                "SELECT primaryCauseCode, provenance, tripId FROM trip_events"
+                "SELECT primaryCauseCode, provenance, tripId, codebookVersion FROM trip_events"
             ).use { cursor ->
                 check(cursor.moveToFirst())
                 check(cursor.getString(0) == "SIGNAL")
                 check(cursor.getString(1) == EventProvenance.LEGACY_IMPORTED)
                 check(cursor.getLong(2) == 1L)
+                check(cursor.getString(3) == ResearchVersions.LEGACY_MIGRATED_CODEBOOK_VERSION)
             }
             listOf("LOCATION", "ACCELEROMETER", "GYROSCOPE", "ROTATION", "EVENT").forEach { sourceType ->
                 db.query(
@@ -188,14 +191,32 @@ class DatabaseMigrationTest {
                 """
                 INSERT INTO trips(
                     startTimeMs,endTimeMs,startNanoTime,endNanoTime,distanceMeters,eventCount,
-                    gpsPointCount,accelPointCount,causeBreakdown,createdAt,status,tripUuid
-                ) VALUES(1000,2000,0,0,10.0,1,1,1,'{"SIGNAL":1}',1000,0,'legacy-context')
+                    gpsPointCount,accelPointCount,causeBreakdown,createdAt,status,tripUuid,
+                    codebookVersion,causeConfigJson
+                ) VALUES(1000,2000,0,0,10.0,1,1,1,'{"TURNING":1}',1000,0,'legacy-context','3','{"version":"3"}')
                 """.trimIndent()
             )
             db.execSQL(
                 """
                 INSERT INTO trip_data(tripId,timestamp,latitude,longitude,speedKmh)
                 VALUES(1,1500,27.7,85.3,10.0)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO trip_events(
+                    eventId,tripId,markerTimeMs,provisionalCauseCode,primaryCauseCode,
+                    status,provenance,transcript,codebookVersion,createdAt
+                ) VALUES('legacy-turning-v3',1,1500,'TURNING','TURNING','PENDING',
+                    'LEGACY_IMPORTED','log turning','3',1500)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO event_annotations(
+                    annotationId,eventId,annotationVersion,annotationTimestampMs,
+                    primaryCauseCode,codebookVersion,createdAt
+                ) VALUES('legacy-annotation-v3','legacy-turning-v3',1,1501,'TURNING','3',1501)
                 """.trimIndent()
             )
         }
@@ -219,6 +240,23 @@ class DatabaseMigrationTest {
             db.query("SELECT COUNT(*) FROM trip_data WHERE tripId = 1").use { cursor ->
                 check(cursor.moveToFirst())
                 check(cursor.getInt(0) == 1)
+            }
+            db.query("SELECT causeBreakdown, codebookVersion, causeConfigJson FROM trips WHERE id = 1").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getString(0) == "{\"TURNING\":1}")
+                check(cursor.getString(1) == "3")
+                check(cursor.getString(2) == "{\"version\":\"3\"}")
+            }
+            db.query("SELECT provisionalCauseCode, primaryCauseCode, codebookVersion FROM trip_events WHERE eventId = 'legacy-turning-v3'").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getString(0) == "TURNING")
+                check(cursor.getString(1) == "TURNING")
+                check(cursor.getString(2) == "3")
+            }
+            db.query("SELECT primaryCauseCode, codebookVersion FROM event_annotations WHERE annotationId = 'legacy-annotation-v3'").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getString(0) == "TURNING")
+                check(cursor.getString(1) == "3")
             }
         }
     }
