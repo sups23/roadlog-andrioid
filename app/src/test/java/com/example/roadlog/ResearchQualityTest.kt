@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import java.time.Instant
 
 class ResearchQualityTest {
     @Test
@@ -133,6 +134,72 @@ class ResearchQualityTest {
     }
 
     @Test
+    fun `cause taxonomy provenance prefers trip metadata and preserves uncertainty`() {
+        assertEquals("3", CauseTaxonomyVersions.provisionalVersion("3", null, "4"))
+        assertEquals("4", CauseTaxonomyVersions.provisionalVersion(null, "4", "3"))
+        assertEquals(null, CauseTaxonomyVersions.provisionalVersion("3", "4", "3"))
+        assertEquals(null, CauseTaxonomyVersions.provisionalVersion("5", null, "4"))
+        assertEquals(null, CauseTaxonomyVersions.provisionalVersion(null, null, "4", hasAnnotationHistory = true))
+        assertEquals("4", CauseTaxonomyVersions.provisionalVersion(null, null, "4"))
+        assertEquals("3", CauseTaxonomyVersions.currentPrimaryVersion(true, "3", "4"))
+        assertEquals(null, CauseTaxonomyVersions.currentPrimaryVersion(true, null, "4"))
+        assertEquals("4", CauseTaxonomyVersions.currentPrimaryVersion(false, null, "4"))
+    }
+
+    @Test
+    fun `review choices keep v3 residual meaning separate and allow explicit v4 reclassification`() {
+        val v3Choices = CauseReviewChoices.forVersions("3", null)
+        assertTrue(CauseReviewChoice("TURNING", "3") in v3Choices)
+        assertTrue(CauseReviewChoice("TURNING", "4") in v3Choices)
+        assertTrue(CauseReviewChoice("SPEED_BREAKER", "4") in v3Choices)
+        assertFalse(CauseReviewChoice("SPEED_BREAKER", "3") in v3Choices)
+        assertTrue(CauseReviewChoice("TURNING", "3").label.contains("v3 legacy"))
+        assertTrue(CauseReviewChoice("TURNING", "4").label.contains("v4 residual"))
+
+        val v4Choices = CauseReviewChoices.forVersions("4", "3")
+        assertTrue(CauseReviewChoice("TURNING", "4") in v4Choices)
+        assertFalse(CauseReviewChoice("TURNING", "3") in v4Choices)
+        assertTrue(CauseReviewChoices.forVersions(null, "3").any { it.codebookVersion == "3" })
+        assertTrue(CauseReviewChoices.forVersions(null, "4").any { it.codebookVersion == "4" })
+        assertTrue(CauseReviewChoices.forVersions(null, null).any { it.codebookVersion == "3" })
+        assertTrue(CauseReviewChoices.forVersions(null, null).any { it.codebookVersion == "4" })
+    }
+
+    @Test
+    fun `annotation validation checks cause against selected codebook`() {
+        assertTrue(
+            EventAnnotationValidator.validate(
+                EventAnnotation(
+                    primaryCauseCode = "SPEED_BREAKER",
+                    confidenceCode = null,
+                    trafficState = null,
+                    codebookVersion = "3"
+                )
+            ).contains("invalid primary cause code for codebook 3")
+        )
+        assertTrue(
+            EventAnnotationValidator.validate(
+                EventAnnotation(
+                    primaryCauseCode = "TURNING",
+                    confidenceCode = null,
+                    trafficState = null,
+                    codebookVersion = "99"
+                )
+            ).contains("unknown cause codebook version")
+        )
+        assertTrue(
+            EventAnnotationValidator.validate(
+                EventAnnotation(
+                    primaryCauseCode = "UNKNOWN",
+                    confidenceCode = null,
+                    trafficState = null,
+                    codebookVersion = "3"
+                )
+            ).isEmpty()
+        )
+    }
+
+    @Test
     fun `event provenance includes the active voice input method`() {
         assertTrue(EventProvenance.VOICE_RECOGNIZED in EventProvenance.values)
     }
@@ -140,5 +207,41 @@ class ResearchQualityTest {
     @Test
     fun `study date uses Kathmandu local timezone`() {
         assertEquals("2024-07-17", ResearchClock.studyDateLocal(1_721_203_200_000L))
+    }
+
+    @Test
+    fun `audio folder date uses trip timezone and zero padded format`() {
+        val startTimeMs = Instant.parse("2024-01-01T23:30:00Z").toEpochMilli()
+
+        assertEquals("2024_01_02", ResearchClock.tripStartDateForAudioFolder(startTimeMs, "Asia/Kathmandu"))
+        assertEquals("2024_01_01", ResearchClock.tripStartDateForAudioFolder(startTimeMs, "UTC"))
+    }
+
+    @Test
+    fun `audio folder date falls back to study timezone when trip timezone is absent or invalid`() {
+        val startTimeMs = Instant.parse("2024-01-01T23:30:00Z").toEpochMilli()
+
+        assertEquals("2024_01_02", ResearchClock.tripStartDateForAudioFolder(startTimeMs, null))
+        assertEquals("2024_01_02", ResearchClock.tripStartDateForAudioFolder(startTimeMs, "not/a-time-zone"))
+    }
+
+    @Test
+    fun `audio archive path groups by trip id and start date`() {
+        val trip = TestFixtures.tripA().copy(
+            id = 42L,
+            startTimeMs = Instant.parse("2024-01-01T23:30:00Z").toEpochMilli(),
+            timeZoneId = "UTC"
+        )
+        val audio = TripAudio(
+            audioId = "segment-one",
+            tripId = trip.id,
+            startTimeMs = trip.startTimeMs,
+            filePath = "segment-one.m4a"
+        )
+
+        assertEquals(
+            "audio/trip_42_2024_01_01/segment-one.m4a",
+            ResearchExporter.audioArchivePath(trip, audio)
+        )
     }
 }
