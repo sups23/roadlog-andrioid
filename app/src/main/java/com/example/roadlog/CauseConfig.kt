@@ -3,8 +3,8 @@ package com.example.roadlog
 import java.util.Locale
 
 /**
- * Runtime configuration for cause codes, grammar phrases, fuzzy-match variants,
- * and recognition thresholds.
+ * Runtime configuration for cause codes, grammar phrases, approved command
+ * aliases, and recognizer thresholds.
  *
  * Loaded from `assets/cause_config.json` by [CauseConfigLoader].
  */
@@ -53,6 +53,22 @@ data class CauseConfig(
             }
         }.toMap()
 
+    /** Fail closed if configuration would assign the same spoken token to multiple causes. */
+    fun requireUniqueCommandAliases() {
+        require(causes.map { it.code }.distinct().size == causes.size) {
+            "cause configuration contains duplicate cause codes"
+        }
+        val duplicateAliases = causes
+            .flatMap { cause -> (cause.phrases + cause.variants).map { it to cause.code } }
+            .groupBy({ normalizeSpeech(it.first) }, { it.second })
+            .filter { (alias, codes) -> alias.isBlank() || codes.distinct().size > 1 }
+            .keys
+        require(duplicateAliases.isEmpty()) {
+            "cause configuration has blank or cross-cause duplicate command aliases: " +
+                duplicateAliases.sorted().joinToString()
+        }
+    }
+
     fun findActivationPhrase(spoken: String): String? {
         val normalized = normalizeSpeech(spoken)
         return activationPhrases
@@ -76,6 +92,7 @@ enum class CauseCommandRejection {
     UNKNOWN_COMMAND,
     BELOW_CONFIDENCE,
     AMBIGUOUS_COMMAND,
+    MULTIPLE_CAUSES,
     UNMATCHED_COMMAND
 }
 
@@ -86,7 +103,13 @@ data class CauseCommandResult(
 
 /** Parses one activated command without collapsing an ambiguous command to one cause. */
 class CauseCommandParser(private val config: CauseConfig) {
-    private val fuzzyMatcher = FuzzyCauseMatcher(config)
+    private val aliasesByCause = config.causes.associate { cause ->
+        cause.code to (cause.phrases + cause.variants).map { CauseConfig.normalizeSpeech(it) }.distinct()
+    }
+
+    init {
+        config.requireUniqueCommandAliases()
+    }
 
     fun parse(spoken: String): CauseCommandResult {
         val normalized = CauseConfig.normalizeSpeech(spoken)
@@ -100,39 +123,19 @@ class CauseCommandParser(private val config: CauseConfig) {
             return CauseCommandResult(rejection = CauseCommandRejection.UNKNOWN_COMMAND)
         }
 
-        val phraseCodes = config.causes.filter { cause ->
-            (cause.phrases + cause.variants).any { keyword ->
-                containsWholePhrase(command, CauseConfig.normalizeSpeech(keyword))
-            }
-        }.map { it.code }.distinct()
-        if (phraseCodes.size > 1) {
-            return CauseCommandResult(rejection = CauseCommandRejection.AMBIGUOUS_COMMAND)
+        val containedCodes = aliasesByCause.filterValues { aliases ->
+            aliases.any { alias -> containsWholePhrase(command, alias) }
+        }.keys
+        if (containedCodes.size > 1) {
+            return CauseCommandResult(rejection = CauseCommandRejection.MULTIPLE_CAUSES)
         }
 
-        val exactCodes = config.causes.filter { cause ->
-            (cause.phrases + cause.variants).any { CauseConfig.normalizeSpeech(it) == command }
-        }.map { it.code }.distinct()
-        if (exactCodes.size == 1) {
-            return CauseCommandResult(causeCode = exactCodes.single())
+        val exactCodes = aliasesByCause.filterValues { aliases -> command in aliases }.keys
+        return when {
+            exactCodes.size == 1 -> CauseCommandResult(causeCode = exactCodes.single())
+            exactCodes.size > 1 -> CauseCommandResult(rejection = CauseCommandRejection.AMBIGUOUS_COMMAND)
+            else -> CauseCommandResult(rejection = CauseCommandRejection.UNMATCHED_COMMAND)
         }
-        if (exactCodes.size > 1) {
-            return CauseCommandResult(rejection = CauseCommandRejection.AMBIGUOUS_COMMAND)
-        }
-        if (phraseCodes.size == 1) {
-            return CauseCommandResult(rejection = CauseCommandRejection.UNMATCHED_COMMAND)
-        }
-
-        val matches = fuzzyMatcher.findBestMatches(command)
-            .filter { it.score >= config.fuzzyThreshold }
-        if (matches.isEmpty()) {
-            return CauseCommandResult(rejection = CauseCommandRejection.UNMATCHED_COMMAND)
-        }
-        val best = matches.first()
-        val tied = matches.drop(1).any { it.score == best.score }
-        if (tied) {
-            return CauseCommandResult(rejection = CauseCommandRejection.AMBIGUOUS_COMMAND)
-        }
-        return CauseCommandResult(causeCode = best.causeCode)
     }
 
     private fun containsWholePhrase(text: String, phrase: String): Boolean {
@@ -148,8 +151,8 @@ class CauseCommandParser(private val config: CauseConfig) {
  * @property displayName Human-readable long name (used in trip breakdowns).
  * @property shortForm Short text shown on the main-screen label.
  * @property phrases Exact phrases included in the Vosk grammar.
- * @property variants Additional misheard/pronunciation variants used only by
- *           the fuzzy matcher as a fallback.
+ * @property variants Additional explicitly approved whole-command aliases. The
+ *           activated parser accepts these exactly and never fuzzy-resolves them.
  */
 data class CauseDefinition(
     val code: String,
@@ -157,5 +160,6 @@ data class CauseDefinition(
     val shortForm: String,
     val phrases: List<String>,
     val variants: List<String>,
-    val voiceOnly: Boolean = false
+    val voiceOnly: Boolean = false,
+    val definition: String? = null
 )

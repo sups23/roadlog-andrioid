@@ -1,5 +1,5 @@
 {
-  "version": "3",
+  "version": "4",
   "confidenceThreshold": 0.6,
   "fuzzyThreshold": 0.85,
   "minWordLength": 3,
@@ -84,9 +84,7 @@
         "roughness",
         "rough road",
         "pothole",
-        "pot hole",
-        "speed breaker",
-        "speed bump"
+        "pot hole"
       ],
       "variants": [
         "rough",
@@ -101,12 +99,7 @@
         "potholes",
         "pot holes",
         "pothol",
-        "pothawl",
-        "speed breakers",
-        "speedbump",
-        "speed bumps",
-        "speedbrake",
-        "speed brake"
+        "pothawl"
       ]
     },
     {
@@ -128,39 +121,21 @@
       "code": "FRICTION",
       "displayName": "FRICTION",
       "shortForm": "FRICTION",
+      "definition": "An observed lateral road-space obstruction directly impedes movement and cannot be assigned to a more specific cause. Vehicle interactions and road-surface defects are excluded; mere presence is insufficient.",
       "phrases": [
-        "friction",
-        "parked car",
-        "side friction"
+        "side obstruction"
       ],
-      "variants": [
-        "frictions",
-        "parked",
-        "friktion",
-        "frickshun",
-        "parkin",
-        "parkd",
-        "frikshin"
-      ]
+      "variants": []
     },
     {
       "code": "TURNING",
       "displayName": "TURNING",
       "shortForm": "TURNING",
+      "definition": "An observed other vehicle’s turn or U-turn directly impedes the rider, but does not enter the rider’s path as MERGING, turn out of the lane ahead as LEAD_TURN, or cross the path from oncoming traffic as CROSSING_TURN. The rider’s own planned turn is excluded.",
       "phrases": [
-        "turning",
-        "turning vehicle",
-        "u turn"
+        "other turn"
       ],
-      "variants": [
-        "turns",
-        "u-turn",
-        "tern",
-        "terning",
-        "torn",
-        "tarning",
-        "uturn"
-      ]
+      "variants": []
     },
     {
       "code": "MARKET",
@@ -192,6 +167,70 @@
       ],
       "variants": [],
       "voiceOnly": false
+    },
+    {
+      "code": "SLOW_LEAD_VEHICLE",
+      "displayName": "SLOW LEAD VEHICLE",
+      "shortForm": "SLOW LEAD",
+      "definition": "One identifiable vehicle ahead directly constrains movement and cannot be passed; do not infer why it is slow.",
+      "phrases": ["slow lead", "slow lead vehicle"],
+      "variants": []
+    },
+    {
+      "code": "MERGING",
+      "displayName": "MERGING",
+      "shortForm": "MERGING",
+      "definition": "Another vehicle enters the rider’s travel path and directly causes slowing or yielding.",
+      "phrases": ["merging"],
+      "variants": []
+    },
+    {
+      "code": "LEAD_TURN",
+      "displayName": "LEAD TURN",
+      "shortForm": "LEAD TURN",
+      "definition": "A vehicle ahead turns out of the rider’s lane into a side road and directly slows the rider.",
+      "phrases": ["lead turn"],
+      "variants": []
+    },
+    {
+      "code": "CROSSING_TURN",
+      "displayName": "CROSSING TURN",
+      "shortForm": "CROSSING TURN",
+      "definition": "An oncoming vehicle turns across the rider’s path and directly causes slowing or yielding.",
+      "phrases": ["crossing turn"],
+      "variants": []
+    },
+    {
+      "code": "PARKED_BIKE",
+      "displayName": "PARKED BIKE",
+      "shortForm": "PARKED BIKE",
+      "definition": "A parked motorcycle or scooter directly obstructs usable road space.",
+      "phrases": ["parked bike"],
+      "variants": []
+    },
+    {
+      "code": "PARKED_CAR",
+      "displayName": "PARKED CAR",
+      "shortForm": "PARKED CAR",
+      "definition": "A parked car directly obstructs usable road space.",
+      "phrases": ["parked car"],
+      "variants": []
+    },
+    {
+      "code": "DELIVERY_STOP",
+      "displayName": "DELIVERY STOP",
+      "shortForm": "DELIVERY STOP",
+      "definition": "A vehicle stopped for evidenced delivery, collection, loading, or unloading directly obstructs movement; do not infer purpose from vehicle type or mere presence.",
+      "phrases": ["delivery stop"],
+      "variants": []
+    },
+    {
+      "code": "SPEED_BREAKER",
+      "displayName": "SPEED BREAKER",
+      "shortForm": "SPEED BREAKER",
+      "definition": "Crossing a speed breaker is linked to a slowdown satisfying the study’s validated episode rule; ordinary manoeuvring alone is not a validated event.",
+      "phrases": ["speed breaker"],
+      "variants": []
     }
   ]
 }

@@ -23,7 +23,7 @@ object CauseConfigLoader {
             parseCause(causesArray.getJSONObject(i))
         }
 
-        return CauseConfig(
+        val config = CauseConfig(
             confidenceThreshold = root.optDouble("confidenceThreshold", 0.6).toFloat(),
             fuzzyThreshold = root.optDouble("fuzzyThreshold", 0.85),
             minWordLength = root.optInt("minWordLength", 3),
@@ -36,6 +36,18 @@ object CauseConfigLoader {
             version = root.optString("version", ResearchCodebook.VERSION),
             rawJson = rawJson
         )
+        config.requireUniqueCommandAliases()
+        if (config.version == ResearchCodebook.VERSION) {
+            require(config.causes.map { it.code }.toSet() == ResearchCodebook.primaryCodes) {
+                "cause configuration codes do not match codebook version ${config.version}"
+            }
+            ResearchCodebook.v4Definitions.forEach { (code, definition) ->
+                require(config.findByCode(code)?.definition == definition) {
+                    "cause definition for $code does not match codebook version ${config.version}"
+                }
+            }
+        }
+        return config
     }
 
     private fun parseCause(obj: JSONObject): CauseDefinition {
@@ -45,7 +57,8 @@ object CauseConfigLoader {
             shortForm = obj.getString("shortForm"),
             phrases = parseStringArray(obj.getJSONArray("phrases")),
             variants = parseStringArray(obj.optJSONArray("variants") ?: org.json.JSONArray()),
-            voiceOnly = obj.optBoolean("voiceOnly", false)
+            voiceOnly = obj.optBoolean("voiceOnly", false),
+            definition = obj.optString("definition").takeIf { it.isNotBlank() }
         )
     }
 
