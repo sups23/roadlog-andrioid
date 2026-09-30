@@ -238,6 +238,10 @@ object ResearchExporter {
 
             val selectedEvents = trips.flatMap { database.tripDao().getTripEvents(it.id) }
             val selectedEventIds = selectedEvents.map { it.eventId }.toSet()
+            val annotations = database.tripDao().getAllAnnotationsForExport()
+                .filter { annotation -> annotation.eventId in selectedEventIds }
+            val latestAnnotationByEvent = annotations.groupBy { it.eventId }
+                .mapValues { (_, revisions) -> revisions.maxByOrNull { it.annotationVersion } }
             eventCount = selectedEvents.size
             if (restricted) {
                 val eventsCsv = StringBuilder(
@@ -246,15 +250,26 @@ object ResearchExporter {
                         "source_location_visible,location_accuracy_meters,location_provider,location_fix_time_ms," +
                         "location_fix_elapsed_realtime_nanos,location_fix_age_ms,speed_valid,speed_kmh," +
                         "provisional_cause_code,primary_cause_code,confidence_code,traffic_state,status,provenance," +
-                        "transcript,recognition_confidence,codebook_version,notes\n"
+                        "transcript,recognition_confidence,codebook_version,provisional_codebook_version," +
+                        "primary_codebook_version,notes\n"
                 )
                 selectedEvents.forEach { event ->
+                    val trip = tripsById[event.tripId]
+                    val latestAnnotation = latestAnnotationByEvent[event.eventId]
+                    val provisionalVersion = eventProvisionalCodebookVersion(
+                        trip, event, hasAnnotationHistory = latestAnnotation != null
+                    )
+                    val primaryVersion = CauseTaxonomyVersions.currentPrimaryVersion(
+                        hasAnnotation = latestAnnotation != null,
+                        annotationVersion = latestAnnotation?.codebookVersion,
+                        provisionalVersion = provisionalVersion
+                    )
                     eventsCsv.appendLine(
                         csvRow(
                             listOf(
                                 event.eventId,
                                 event.tripId,
-                                tripsById[event.tripId]?.tripUuid,
+                                trip?.tripUuid,
                                 event.markerTimeMs,
                                 event.markerElapsedRealtimeNanos,
                                 event.experiencedLatitude,
@@ -270,7 +285,7 @@ object ResearchExporter {
                                 event.speedValid,
                                 event.speedKmh,
                                 event.provisionalCauseCode,
-                                event.primaryCauseCode,
+                                latestAnnotation?.primaryCauseCode ?: event.primaryCauseCode,
                                 event.confidenceCode,
                                 event.trafficState,
                                 event.status,
@@ -278,6 +293,8 @@ object ResearchExporter {
                                 event.transcript,
                                 event.recognitionConfidence,
                                 event.codebookVersion,
+                                provisionalVersion,
+                                primaryVersion,
                                 event.notes
                             )
                         )
@@ -288,10 +305,20 @@ object ResearchExporter {
                 val eventsCsv = StringBuilder(
                     "event_id,trip_uuid,marker_elapsed_ms,source_location_present,speed_valid,speed_kmh," +
                         "provisional_cause_code,primary_cause_code,confidence_code,traffic_state,status,provenance," +
-                        "recognition_confidence,codebook_version\n"
+                        "recognition_confidence,codebook_version,provisional_codebook_version," +
+                        "primary_codebook_version\n"
                 )
                 selectedEvents.forEach { event ->
                     val trip = tripsById[event.tripId]
+                    val latestAnnotation = latestAnnotationByEvent[event.eventId]
+                    val provisionalVersion = eventProvisionalCodebookVersion(
+                        trip, event, hasAnnotationHistory = latestAnnotation != null
+                    )
+                    val primaryVersion = CauseTaxonomyVersions.currentPrimaryVersion(
+                        hasAnnotation = latestAnnotation != null,
+                        annotationVersion = latestAnnotation?.codebookVersion,
+                        provisionalVersion = provisionalVersion
+                    )
                     eventsCsv.appendLine(
                         csvRow(
                             listOf(
@@ -301,14 +328,16 @@ object ResearchExporter {
                                 event.sourceLocationVisible == true,
                                 event.speedValid,
                                 event.speedKmh,
-                                event.provisionalCauseCode?.let { CauseCodeMigration.toCanonicalOrUnknown(it) },
-                                event.primaryCauseCode?.let { CauseCodeMigration.toCanonicalOrUnknown(it) },
+                                event.provisionalCauseCode,
+                                latestAnnotation?.primaryCauseCode ?: event.primaryCauseCode,
                                 event.confidenceCode,
                                 event.trafficState,
                                 event.status,
                                 event.provenance,
                                 event.recognitionConfidence,
-                                event.codebookVersion
+                                event.codebookVersion,
+                                provisionalVersion,
+                                primaryVersion
                             )
                         )
                     )
@@ -316,8 +345,6 @@ object ResearchExporter {
                 textEntry("events/events.csv", eventsCsv.toString())
             }
 
-            val annotations = database.tripDao().getAllAnnotationsForExport()
-                .filter { annotation -> annotation.eventId in selectedEventIds }
             annotationCount = annotations.size
             if (restricted) {
                 val annotationsCsv = StringBuilder(
@@ -355,7 +382,7 @@ object ResearchExporter {
                                 annotation.annotationId,
                                 annotation.eventId,
                                 annotation.annotationVersion,
-                                CauseCodeMigration.toCanonicalOrUnknown(annotation.primaryCauseCode),
+                                annotation.primaryCauseCode,
                                 annotation.trafficState,
                                 annotation.confidenceCode,
                                 annotation.codebookVersion
@@ -433,7 +460,7 @@ object ResearchExporter {
                         val evidence = reconcileAudioEvidence(database, audio)
                         val file = audio.filePath.takeIf { it.isNotBlank() }?.let(::File)
                         val archivePath = if (evidence.filePresent) {
-                            val name = "audio/${audio.audioId}.m4a"
+                            val name = audioArchivePath(trip, audio)
                             mediaFiles += name to file!!
                             name
                         } else {
@@ -503,7 +530,7 @@ object ResearchExporter {
                                         row.latitude,
                                         row.longitude,
                                         row.speedKmh,
-                                        row.eventCause,
+                                        CauseCodeMigration.toCanonicalOrKnownOrUnknown(row.eventCause),
                                         row.rawTimestamp,
                                         row.sourceTimestampNanos,
                                         row.callbackTimeMs,
@@ -540,7 +567,7 @@ object ResearchExporter {
                                         trip.tripUuid,
                                         row.timestamp - trip.startTimeMs,
                                         row.speedKmh,
-                                        row.eventCause?.let { CauseCodeMigration.toCanonicalOrUnknown(it) },
+                                        row.eventCause,
                                         row.accelX,
                                         row.accelY,
                                         row.accelZ,
@@ -755,6 +782,33 @@ object ResearchExporter {
                 JSONObject().apply {
                     put("version", ResearchCodebook.VERSION)
                     put("primary_codes", JSONArray(ResearchCodebook.primaryCodes.toList().sorted()))
+                    put("definitions", JSONObject().apply {
+                        ResearchCodebook.v4Definitions.forEach { (code, definition) -> put(code, definition) }
+                    })
+                    put("definition_scope", "The listed definitions add v4 causes and bound TURNING/FRICTION; remaining v4 causes retain their v3 meanings.")
+                    put("unchanged_from_v3", JSONArray(
+                        (ResearchCodebook.v3PrimaryCodes - ResearchCodebook.v4ResidualCodes).toList().sorted()
+                    ))
+                    put("version_specific_codebooks", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("version", ResearchCodebook.LEGACY_V3_VERSION)
+                            put("primary_codes", JSONArray(ResearchCodebook.v3PrimaryCodes.toList().sorted()))
+                            put("definitions", JSONObject().apply {
+                                ResearchCodebook.v3ResidualDefinitions.forEach { (code, definition) -> put(code, definition) }
+                            })
+                            put("definitions_reference", "Other v3 meanings are unchanged; per-trip cause_config_path preserves the original runtime grammar when present. Missing historical provenance remains unknown.")
+                        })
+                        put(JSONObject().apply {
+                            put("version", ResearchCodebook.VERSION)
+                            put("primary_codes", JSONArray(ResearchCodebook.primaryCodes.toList().sorted()))
+                            put("definitions", JSONObject().apply {
+                                ResearchCodebook.v4Definitions.forEach { (code, definition) -> put(code, definition) }
+                            })
+                            put("unchanged_from_v3", JSONArray(
+                                (ResearchCodebook.v3PrimaryCodes - ResearchCodebook.v4ResidualCodes).toList().sorted()
+                            ))
+                        })
+                    })
                     put("traffic_states", JSONArray(ResearchCodebook.trafficStates.toList().sorted()))
                     put("weather", JSONArray(TripWeather.values))
                     put("road_wetness", JSONArray(RoadWetness.values))
@@ -779,9 +833,34 @@ object ResearchExporter {
                          "vehicle_year", "weather", "road_wetness", "route_diversion",
                          "non_traffic_stop", "context_note", "context_collected_at_ms"
                      )))
-                 }.toString()
+                     put("cause_version_fields", JSONObject().apply {
+                         put("codebook_version", "Existing event field retained for compatibility; older reviewed rows may reflect the prior review behavior.")
+                         put("provisional_codebook_version", "Version resolved from consistent trip/config metadata; falls back to event metadata only when no annotation history exists. Null means uncertain.")
+                         put("primary_codebook_version", "Latest annotation revision version, or provisional version when no review exists; null means uncertain.")
+                     })
+                  }.toString()
             )
 
+            val codebookVersionsPresent = buildSet<String> {
+                trips.forEach { trip ->
+                    trip.codebookVersion?.takeIf { CauseTaxonomyVersions.isKnown(it) }?.let { add(it) }
+                }
+                selectedEvents.forEach { event ->
+                    val revision = latestAnnotationByEvent[event.eventId]
+                    val provisionalVersion = eventProvisionalCodebookVersion(
+                        tripsById[event.tripId], event, hasAnnotationHistory = revision != null
+                    )
+                    provisionalVersion?.let { add(it) }
+                    CauseTaxonomyVersions.currentPrimaryVersion(
+                        hasAnnotation = revision != null,
+                        annotationVersion = revision?.codebookVersion,
+                        provisionalVersion = provisionalVersion
+                    )?.let { add(it) }
+                }
+                annotations.forEach { annotation ->
+                    annotation.codebookVersion.takeIf { CauseTaxonomyVersions.isKnown(it) }?.let { add(it) }
+                }
+            }
             val manifest = JSONObject().apply {
                 put("export_mode", mode.archiveLabel)
                 put("export_format_version", ResearchVersions.EXPORT_FORMAT_VERSION)
@@ -792,6 +871,7 @@ object ResearchExporter {
                 put("session_id", ResearchStudy.SESSION_ID)
                 put("corridor_id", ResearchStudy.CORRIDOR_ID)
                 put("codebook_version", ResearchCodebook.VERSION)
+                put("codebook_versions_present", JSONArray(codebookVersionsPresent.toList().sorted()))
                 put("sensor_profile_version", ResearchVersions.SENSOR_PROFILE_VERSION)
                 put("contains_precise_gps", restricted)
                 put("contains_audio", restricted)
@@ -831,6 +911,26 @@ object ResearchExporter {
             annotationCount = annotationCount,
             audioCount = audioCount,
             outputBytes = output.length()
+        )
+    }
+
+    internal fun audioArchivePath(trip: Trip, audio: TripAudio): String =
+        "audio/trip_${trip.id}_" +
+            "${ResearchClock.tripStartDateForAudioFolder(trip.startTimeMs, trip.timeZoneId)}/${audio.audioId}.m4a"
+
+    private fun eventProvisionalCodebookVersion(
+        trip: Trip?,
+        event: TripEvent,
+        hasAnnotationHistory: Boolean = false
+    ): String? {
+        val configVersion = trip?.causeConfigJson?.let { raw ->
+            runCatching { JSONObject(raw).optString("version").takeIf { it.isNotBlank() } }.getOrNull()
+        }
+        return CauseTaxonomyVersions.provisionalVersion(
+            tripVersion = trip?.codebookVersion,
+            configVersion = configVersion,
+            eventVersion = event.codebookVersion,
+            hasAnnotationHistory = hasAnnotationHistory
         )
     }
 
